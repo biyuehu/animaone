@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@kotori-bot/*": ["./packages/*/src"]
+    }
+  },
+  "exclude": ["tsup.config.ts"]
+}
