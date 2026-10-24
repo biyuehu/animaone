@@ -1,0 +1,28 @@
+{
+  "name": "kotori-plugin-chat-ai",
+  "version": "1.0.0",
+  "description": "a kotori project kotori project",
+  "main": "lib/index.js",
+  "keywords": [
+    "kotori",
+    "chatbot",
+    "kotori-plugin"
+  ],
+  "license": "GPL-3.0-only",
+  "files": [
+    "lib",
+    "locales",
+    "LICENSE",
+    "README.md"
+  ],
+  "author": "Romi <biyuehuya@gmail.com>",
+  "peerDependencies": {
+    "kotori-bot": "^1.7.2"
+  },
+  "dependencies": {
+    "@google/genai": "^2.31.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
+}
