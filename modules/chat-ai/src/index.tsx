@@ -3,6 +3,7 @@ import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
+import { delay, splitSentences } from './core/split'
 import { MessageGateway } from './gateway/filter'
 import { HierarchicalMemoryService } from './memory'
 
@@ -14,7 +15,8 @@ export const config = Tsu.Object({
   experimentSampleRate: Tsu.Number().range(0, 1).default(0.05),
   commandPrefix: Tsu.String().default('/'),
   botName: Tsu.String().default('露米 (Romi)'),
-  ownerNick: Tsu.String().default('大哥哥')
+  ownerNick: Tsu.String().default('大哥哥'),
+  enableHumanDelay: Tsu.Boolean().default(true)
 })
 
 type Config = Tsu.infer<typeof config>
@@ -28,7 +30,6 @@ export function main(ctx: Context, cfg: Config) {
     commandPrefix: cfg.commandPrefix
   })
 
-  // 旗舰级分层记忆服务（自动持久化至 data/memory.db）
   const memory = new HierarchicalMemoryService(cfg.apiKey)
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
@@ -62,6 +63,17 @@ export function main(ctx: Context, cfg: Config) {
       const reply = await geminiClient.chat(systemPrompt, history, rawMessage, abilityManager, abilityCtx)
 
       memory.recordTurn(scopeKey, userId, rawMessage, reply)
+
+      // 拟人分句与打字机节奏发送
+      const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
+      if (segments.length > 1) {
+        for (let i = 0; i < segments.length - 1; i++) {
+          await session.send(segments[i])
+          await delay(Math.min(1200, Math.max(400, segments[i].length * 40)))
+        }
+        return segments[segments.length - 1]
+      }
+
       return reply
     } catch (err) {
       console.error('Chat-AI execution error:', err instanceof Error ? err.message : err)
