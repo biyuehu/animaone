@@ -1,3 +1,5 @@
+import { DEFAULT_BOT_NAME, DEFAULT_OWNER_NICK } from './constants'
+
 export interface PersonaTemplateConfig {
   readonly botName?: string
   readonly ownerNick?: string
@@ -55,8 +57,8 @@ export function buildSystemPrompt(
   runtime: PersonaRuntimeContext,
   extraContexts: string[] = []
 ): string {
-  const botName = templates.botName ?? '露米'
-  const ownerNick = templates.ownerNick ?? '大哥哥'
+  const botName = templates.botName ?? DEFAULT_BOT_NAME
+  const ownerNick = templates.ownerNick ?? DEFAULT_OWNER_NICK
   const masterIdStr = runtime.masterId ? String(runtime.masterId) : '未指定'
 
   const replacePlaceholders = (text: string) =>
@@ -93,12 +95,17 @@ export function buildSystemPrompt(
     parts.push(replacePlaceholders(templates.guestGroup ?? DEFAULT_GUEST_GROUP))
   }
 
-  // 4. 时间与时空感知
+  // 4. 时间与时空感知（每轮硬注入环境事实）
   const now = new Date()
   const timeString = now.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
-  let envSection = `【当前时间与环境感知】\n- 当前时间（北京时间）：${timeString}\n- 接入平台: ${runtime.platform}`
-  if (isGroup) envSection += `\n- 当前群聊: ${runtime.groupId}`
-  parts.push(envSection)
+  const scopeType = isGroup ? `公开群聊 (Group ID: ${runtime.groupId})` : '私聊环境 (Private)'
+  const roleType = runtime.isOwner
+    ? `你的唯一主人: ${ownerNick} (ID: ${masterIdStr})`
+    : `普通成员 (ID: ${runtime.userId})`
+
+  parts.push(
+    `【当前时间与环境感知】\n- 当前时间（北京时间）：${timeString}\n- 接入平台: ${runtime.platform}\n- 对话环境: ${scopeType}\n- 当前对话者身份: ${roleType}`
+  )
 
   // 5. 记忆、画像与上下文注入
   if (extraContexts.length > 0) {

@@ -1,6 +1,7 @@
 import { type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
+import { DEFAULT_BOT_NAME, DEFAULT_OWNER_NICK } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
 import { delay, splitSentences } from './core/split'
@@ -14,9 +15,8 @@ export const config = Tsu.Object({
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
   experimentGroups: Tsu.Array(Tsu.String()).default([]),
   experimentSampleRate: Tsu.Number().range(0, 1).default(0.05),
-  commandPrefix: Tsu.String().default('/'),
-  botName: Tsu.String().default('露米 (Romi)'),
-  ownerNick: Tsu.String().default('大哥哥'),
+  botName: Tsu.String().default(DEFAULT_BOT_NAME),
+  ownerNick: Tsu.String().default(DEFAULT_OWNER_NICK),
   basePersona: Tsu.String().optional(),
   ownerPrivate: Tsu.String().optional(),
   ownerGroup: Tsu.String().optional(),
@@ -33,7 +33,6 @@ export function main(ctx: Context, cfg: Config) {
     whitelistedGroups: cfg.whitelistedGroups,
     experimentGroups: cfg.experimentGroups,
     experimentSampleRate: cfg.experimentSampleRate,
-    commandPrefix: cfg.commandPrefix,
     allowedPlatforms: cfg.allowedPlatforms
   })
 
@@ -67,11 +66,7 @@ export function main(ctx: Context, cfg: Config) {
     const isOwner = masterId ? userId === String(masterId) : false
 
     // 0. 网关判定（含顶层平台白名单与群聊拦截）
-    const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId)
-    if (decision.reason === 'command_intercept' && decision.interceptResponse) {
-      await session.quick(decision.interceptResponse)
-      return
-    }
+    const decision = gateway.evaluate(userId, groupId, platform, masterId)
     if (!decision.allow) return next()
 
     if (!geminiClient) {
