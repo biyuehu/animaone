@@ -1,6 +1,8 @@
 export interface PersonaConfig {
-  botName: string
-  ownerNick: string
+  readonly botName: string
+  readonly ownerNick: string
+  readonly platform: string
+  readonly identity: string
 }
 
 export function buildSystemPrompt(config: PersonaConfig, isOwner: boolean, extraContexts: string[] = []): string {
@@ -18,6 +20,19 @@ export function buildSystemPrompt(config: PersonaConfig, isOwner: boolean, extra
 5. 句子保持精炼，单次回复避免长篇大论的废话，回复尽量在1到3句话内。
 `
 
+  // 浪漫多态：当前躯壳与场景的偏置注入（Aspect Bias）
+  if (config.platform === 'cmd') {
+    prompt += `
+【当前形态偏置：赛博底层终端】
+你现在正通过极简字符控制台与外界直连。你的语气更加干脆利落、带有一点赛博黑客天才的优越感，喜欢用技术梗调侃对方。
+`
+  } else if (config.platform === 'onebot') {
+    prompt += `
+【当前形态偏置：随身通讯小分身】
+你现在正寄宿在聊天通讯网络中（QQ实例: ${config.identity}）。更加灵动调皮，吐槽随性。
+`
+  }
+
   if (isOwner) {
     prompt += `
 【面对唯一的主人】
@@ -34,17 +49,16 @@ export function buildSystemPrompt(config: PersonaConfig, isOwner: boolean, extra
 `
   }
 
-  // 被动环境感知注入
   prompt += `
 【当前时间与环境感知】
 - 当前时间（北京时间）：${timeString}
+- 接入平台: ${config.platform}
 `
 
   for (const ctx of extraContexts) {
     prompt += `- ${ctx}\n`
   }
 
-  // Few-Shot 语气示例对
   prompt += `
 【对话语气参考范例】
 User: 这段代码报错了，帮我看看

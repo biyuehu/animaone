@@ -7,6 +7,7 @@ export interface MemoryNode {
   readonly level: 'topic' | 'day' | 'week' | 'month' | 'quarter' | 'year'
   readonly scopeKey: string
   readonly summary: string
+  readonly tags?: string // 逗号分隔的概念线索词，供顺藤摸瓜联想
   readonly startTime: number
   readonly endTime: number
   readonly createdAt: number
@@ -19,6 +20,13 @@ export interface UserFact {
   readonly category: 'preference' | 'identity' | 'event' | 'relation'
   readonly weight: number
   readonly updatedAt: number
+}
+
+export interface MemoryLink {
+  readonly fromId: number
+  readonly toId: number
+  readonly concept: string
+  readonly strength: number
 }
 
 export class MemoryDatabase {
@@ -39,11 +47,25 @@ export class MemoryDatabase {
         level TEXT NOT NULL,
         scope_key TEXT NOT NULL,
         summary TEXT NOT NULL,
+        tags TEXT DEFAULT '',
         start_time INTEGER NOT NULL,
         end_time INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_memory_scope_level ON memory_nodes(scope_key, level);
+
+      -- 概念关联图谱边表（Graph Association）
+      CREATE TABLE IF NOT EXISTS memory_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_id INTEGER NOT NULL,
+        to_id INTEGER NOT NULL,
+        concept TEXT NOT NULL,
+        strength REAL DEFAULT 1.0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_links_from ON memory_links(from_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_links_concept ON memory_links(concept);
+
       CREATE TABLE IF NOT EXISTS user_profiles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
@@ -56,20 +78,86 @@ export class MemoryDatabase {
     `)
   }
 
-  public addNode(node: MemoryNode): void {
+  public addNode(node: MemoryNode): number {
+    const stmt = this.db.prepare(
+      'INSERT INTO memory_nodes (level, scope_key, summary, tags, start_time, end_time, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    const result = stmt.run(
+      node.level,
+      node.scopeKey,
+      node.summary,
+      node.tags ?? '',
+      node.startTime,
+      node.endTime,
+      node.createdAt ?? Date.now()
+    )
+    const newId = Number(result.lastInsertRowid)
+
+    // 如果包含概念线索标签，顺藤摸瓜与历史节点自动织网连边
+    if (node.tags) {
+      const tagList = node.tags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+      for (const tag of tagList) {
+        const related = this.db
+          .prepare('SELECT id FROM memory_nodes WHERE id != ? AND tags LIKE ? ORDER BY end_time DESC LIMIT 2')
+          .all(newId, `%${tag}%`) as { id: number }[]
+        for (const target of related) {
+          this.linkNodes(newId, target.id, tag)
+        }
+      }
+    }
+
+    return newId
+  }
+
+  public linkNodes(fromId: number, toId: number, concept: string): void {
     this.db
-      .prepare(
-        'INSERT INTO memory_nodes (level, scope_key, summary, start_time, end_time, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      )
-      .run(node.level, node.scopeKey, node.summary, node.startTime, node.endTime, node.createdAt ?? Date.now())
+      .prepare('INSERT INTO memory_links (from_id, to_id, concept, strength, created_at) VALUES (?, ?, ?, 1.0, ?)')
+      .run(fromId, toId, concept, Date.now())
   }
 
   public getPyramidMemories(scopeKey: string, maxNodes = 10): MemoryNode[] {
-    return this.db
+    const directNodes = this.db
       .prepare(
-        'SELECT id, level, scope_key as scopeKey, summary, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key = ? ORDER BY end_time DESC LIMIT ?'
+        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key = ? ORDER BY end_time DESC LIMIT ?'
       )
       .all(scopeKey, maxNodes) as unknown as MemoryNode[]
+
+    // 顺藤摸瓜主动联想（沿着图谱关联边带出关键线索）
+    if (directNodes.length === 0) return []
+    const ids = directNodes.map((n) => n.id).filter((id): id is number => typeof id === 'number')
+    if (ids.length === 0) return directNodes
+    const placeholders = ids.map(() => '?').join(',')
+    const associated = this.db
+      .prepare(`
+        SELECT m.id, m.level, m.scope_key as scopeKey, m.summary, m.tags, m.start_time as startTime, m.end_time as endTime, m.created_at as createdAt
+        FROM memory_links l
+        JOIN memory_nodes m ON l.to_id = m.id
+        WHERE l.from_id IN (${placeholders})
+        LIMIT 3
+      `)
+      .all(...ids) as unknown as MemoryNode[]
+
+    const existingIds = new Set(ids)
+    const combined = [...directNodes]
+    for (const node of associated) {
+      if (node.id && !existingIds.has(node.id)) {
+        combined.push(node)
+        existingIds.add(node.id)
+      }
+    }
+
+    return combined
+  }
+
+  public getRandomNodesForReflection(limit = 2): MemoryNode[] {
+    return this.db
+      .prepare(
+        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ORDER BY RANDOM() LIMIT ?'
+      )
+      .all(limit) as unknown as MemoryNode[]
   }
 
   public upsertFact(

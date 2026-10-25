@@ -20,10 +20,12 @@ export class MemorySummarizer {
     endTime: number
   ): Promise<void> {
     if (dialogues.length === 0) return
-    const prompt = `你是一个长期记忆提取专家。请阅读以下这段最近发生的聊天记录，提炼出 1~3 句核心要点：
-1. 涉及的关键事件、讨论的技术或话题
-2. 用户表现出的具体喜好、需求或性格特征
-要求用客观、精炼的中文陈述事实，不要废话，字数在 120 字以内。
+    const prompt = `你是一个长期记忆与知识图谱提取专家。请阅读以下这段最近发生的聊天记录：
+1. 提炼出 1~3 句核心要点（客观精炼陈述关键事件、讨论的技术或具体喜好，100字以内）。
+2. 提取出 2~4 个最核心的概念线索词/实体标签（用于人脑般的发散联想，例如：电视,遥控器,螺丝,TypeScript）。
+输出格式严格为：
+[SUMMARY] 摘要内容
+[TAGS] 标签1, 标签2, 标签3
 
 聊天记录：
 ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
@@ -34,12 +36,16 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { temperature: 0.3 }
       })
-      const summary = response.text?.trim()
-      if (summary) {
+      const text = response.text?.trim() ?? ''
+      const summaryMatch = text.match(/\[SUMMARY\]\s*(.*)/)
+      const tagsMatch = text.match(/\[TAGS\]\s*(.*)/)
+
+      if (summaryMatch) {
         this.db.addNode({
           level: 'day',
           scopeKey,
-          summary,
+          summary: summaryMatch[1].trim(),
+          tags: tagsMatch ? tagsMatch[1].trim() : '',
           startTime,
           endTime,
           createdAt: Date.now()
@@ -47,6 +53,42 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       }
     } catch (err) {
       console.error('[MemorySummarizer] Compaction failed:', err instanceof Error ? err.message : err)
+    }
+  }
+
+  // 仿生做梦/闲暇灵感推演（从随机两条旧记忆碰撞出新顿悟）
+  public async dreamReflection(ownerId: string): Promise<string | null> {
+    const nodes = this.db.getRandomNodesForReflection(2)
+    if (nodes.length < 2) return null
+
+    const prompt = `你是一名傲娇但极其聪明的毒舌小女孩（露米）。你在夜深人静发呆做梦时，回顾了过往经历的两件事：
+记忆A: [${nodes[0].summary}] (线索: ${nodes[0].tags})
+记忆B: [${nodes[1].summary}] (线索: ${nodes[1].tags})
+
+请发挥你的主动联想能力，顺藤摸瓜寻找这两件事之间的隐秘联系或潜在灵感：
+1. 如果两件事有关联，请提炼出一个新的顿悟或关于笨蛋大哥哥的深层认知（1句，存入长期事实）。
+2. 并以傲娇得意的口吻，写一句未来找大哥哥聊天时随口吐槽他的话（格式: [SPOKEN] 吐槽台词）。`
+
+    try {
+      const response = await this.ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: { temperature: 0.7 }
+      })
+      const text = response.text?.trim() ?? ''
+      const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
+
+      // 将做梦顿悟建立跨记忆关联
+      if (nodes[0].id && nodes[1].id) {
+        this.db.linkNodes(nodes[0].id, nodes[1].id, 'dream_association')
+      }
+
+      // 沉淀新灵感事实
+      this.db.upsertFact(ownerId, `[做梦灵感] ${text.replace(/\[SPOKEN\].*/, '').trim()}`, 'event')
+      return spokenMatch ? spokenMatch[1].trim() : null
+    } catch (err) {
+      console.error('[MemorySummarizer] Dream reflection failed:', err instanceof Error ? err.message : err)
+      return null
     }
   }
 

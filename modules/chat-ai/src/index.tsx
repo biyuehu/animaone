@@ -9,25 +9,25 @@ import { HierarchicalMemoryService } from './memory'
 
 export const config = Tsu.Object({
   apiKey: Tsu.String().default(process.env.GEMINI_API_KEY ?? ''),
-  ownerId: Tsu.String().default('3105896973'),
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
   experimentGroups: Tsu.Array(Tsu.String()).default([]),
   experimentSampleRate: Tsu.Number().range(0, 1).default(0.05),
   commandPrefix: Tsu.String().default('/'),
   botName: Tsu.String().default('露米 (Romi)'),
   ownerNick: Tsu.String().default('大哥哥'),
-  enableHumanDelay: Tsu.Boolean().default(true)
+  enableHumanDelay: Tsu.Boolean().default(true),
+  allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot'])
 })
 
 type Config = Tsu.infer<typeof config>
 
 export function main(ctx: Context, cfg: Config) {
   const gateway = new MessageGateway({
-    ownerId: cfg.ownerId,
     whitelistedGroups: cfg.whitelistedGroups,
     experimentGroups: cfg.experimentGroups,
     experimentSampleRate: cfg.experimentSampleRate,
-    commandPrefix: cfg.commandPrefix
+    commandPrefix: cfg.commandPrefix,
+    allowedPlatforms: cfg.allowedPlatforms
   })
 
   const memory = new HierarchicalMemoryService(cfg.apiKey)
@@ -40,11 +40,17 @@ export function main(ctx: Context, cfg: Config) {
     const rawMessage = session.message?.trim()
     if (!rawMessage) return next()
 
+    const adapter = session.api?.adapter
+    const platform = adapter?.platform ?? ''
+    const identity = adapter?.identity ?? 'default'
+    const masterId = (adapter?.config as { master?: string } | undefined)?.master
+
     const userId = String(session.userId)
     const channelId = session.channelId ? String(session.channelId) : undefined
-    const isOwner = userId === String(cfg.ownerId)
+    const isOwner = masterId ? userId === String(masterId) : false
 
-    const decision = gateway.evaluate(userId, channelId, rawMessage)
+    // 0. 网关判定（含顶层平台白名单与复合群聊拦截）
+    const decision = gateway.evaluate(userId, channelId, rawMessage, platform, masterId)
     if (decision.reason === 'command_intercept' && decision.interceptResponse) return decision.interceptResponse
     if (!decision.allow) return next()
 
@@ -53,18 +59,34 @@ export function main(ctx: Context, cfg: Config) {
     }
 
     try {
-      const scopeKey = channelId ? `group:${channelId}` : `private:${userId}`
+      // OneBot 平台专属动态交互：收到消息时触发异步动作/指示
+      if (platform === 'onebot' && typeof (adapter as any)?.call === 'function') {
+        const onebot = adapter as any
+        if (channelId)
+          onebot.call('group_poke', { group_id: Number(channelId), user_id: Number(userId) }).catch(() => {})
+        else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
+      }
+
+      // 记忆作用域隔离（群聊物理隔离，主人认知全局统一于 __master__）
+      const scopeKey = channelId ? `${platform}:group:${channelId}` : `${platform}:private:${userId}`
+      const profileKey = isOwner ? '__master__' : `${platform}:${userId}`
+
       const abilityCtx = { userId, channelId, isOwner, message: rawMessage }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, userId))
+      extraContexts.push(...memory.assemblePromptContext(scopeKey, profileKey))
 
-      const systemPrompt = buildSystemPrompt({ botName: cfg.botName, ownerNick: cfg.ownerNick }, isOwner, extraContexts)
+      // 动态组装带“多态躯壳偏置”的人格 Prompt
+      const systemPrompt = buildSystemPrompt(
+        { botName: cfg.botName, ownerNick: cfg.ownerNick, platform, identity },
+        isOwner,
+        extraContexts
+      )
       const history = memory.getShortTerm(scopeKey)
       const reply = await geminiClient.chat(systemPrompt, history, rawMessage, abilityManager, abilityCtx)
 
-      memory.recordTurn(scopeKey, userId, rawMessage, reply)
+      memory.recordTurn(scopeKey, profileKey, rawMessage, reply)
 
-      // 拟人分句与打字机节奏发送
+      // 拟人分句打字机发送
       const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
       if (segments.length > 1) {
         for (let i = 0; i < segments.length - 1; i++) {
@@ -77,6 +99,7 @@ export function main(ctx: Context, cfg: Config) {
       return reply
     } catch (err) {
       console.error('Chat-AI execution error:', err instanceof Error ? err.message : err)
+      // 私聊对主人娇嗔抱怨报告异常，公开群聊保持绝对静默
       return isOwner
         ? `切，刚才脑子突然卡了一下（${err instanceof Error ? err.message : err}），本天才可没有出错！`
         : next()
