@@ -1,61 +1,61 @@
-export function splitSentences(text: string, minLength = 6, maxLength = 35): string[] {
-  // 保持代码块等特殊结构完整，不打碎代码
-  if (text.includes('```')) return [text.trim()]
+/**
+ * 拟真分句：
+ * - 绝大多数普通闲聊（60 字以内）直接整段发一条，绝不切碎成 3~4 句轰炸刷屏；
+ * - 仅在有明显换行（\n\n）或字数较长且有明确段落感时，才最多切为 2 句。
+ */
+export function splitSentences(text: string): string[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
 
-  // 匹配常见中文标点、英文标点及换行
-  const rawSegments = text.split(/([。！？!?…~\n]+)/g)
-  const initialSentences: string[] = []
+  // 保持代码块完整
+  if (trimmed.includes('```')) return [trimmed]
 
-  for (let i = 0; i < rawSegments.length; i += 2) {
-    const segment = rawSegments[i]?.trim() ?? ''
-    const punctuation = rawSegments[i + 1]?.trim() ?? ''
-    if (segment) initialSentences.push(`${segment}${punctuation}`)
+  // 如果原本就不长（60 字以内），或者没有明显的段落，直接发 1 条，最具人类自然感
+  if (trimmed.length <= 60 && !trimmed.includes('\n\n')) {
+    return [trimmed]
   }
 
-  const finalSentences: string[] = []
-  let current = ''
+  // 尝试优先按双换行或段落分
+  if (trimmed.includes('\n\n')) {
+    const parts = trimmed
+      .split(/\n\s*\n/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+    if (parts.length <= 2) return parts
+    // 最多 2 句，剩下的合并为第 2 句，严禁连发 3 条以上
+    return [parts[0], parts.slice(1).join('\n\n')]
+  }
 
-  for (const sentence of initialSentences) {
-    if (sentence.length > maxLength) {
-      if (current) finalSentences.push(current)
-      finalSentences.push(sentence)
-      current = ''
-      continue
-    }
-
-    if (current.length + sentence.length <= maxLength) {
-      current += sentence
-      if (current.length >= minLength && current.length + sentence.length >= maxLength * 0.7) {
-        finalSentences.push(current)
-        current = ''
-      }
-    } else {
-      if (current) finalSentences.push(current)
-      current = sentence
+  // 如果字数超过 60 字，在句号/感叹号处寻找一次天然切分点（最多拆成 2 句）
+  const splitIndex = trimmed.search(/[。！？!?…~](\s*)/)
+  if (splitIndex > 10 && splitIndex < trimmed.length - 10) {
+    const first = trimmed.slice(0, splitIndex + 1).trim()
+    const second = trimmed.slice(splitIndex + 1).trim()
+    if (first && second) {
+      return [first, second]
     }
   }
 
-  if (current) finalSentences.push(current)
-  return finalSentences.length > 0 ? finalSentences : [text.trim()]
+  return [trimmed]
 }
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * 拟真活人打字延迟计算：
- * 1. 收到消息后需要“看懂 + 思考”时间（800ms ~ 1600ms）；
- * 2. 敲击键盘需要真实打字时间（每字 70ms ~ 110ms），模拟人类真实输入手速；
- * 3. 发送前后带有呼吸微停顿。
+ * 拟真活人阅读与打字耗时：
+ * 1. 模拟真人先“读完消息 + 思考构思”（1.2s ~ 2.2s）；
+ * 2. 模拟真实人类双手打字敲键盘时间（每字 60ms ~ 85ms）；
+ * 3. 第二句发出前带有 1.5s ~ 2.5s 的思考与输入停顿。
  */
 export function calculateTypingDelay(sentence: string, isFirstSentence = false): number {
   if (isFirstSentence) {
-    // 首句起手阅读与组织语言耗时 (800ms ~ 1500ms) + 首句极少数字敲击
-    const thinkTime = 800 + Math.random() * 700
-    const typeTime = Math.min(1000, sentence.length * (60 + Math.random() * 30))
-    return Math.floor(thinkTime + typeTime)
+    // 读完大哥哥的话并思考准备回答 (1200ms ~ 2000ms) + 敲出前几个字
+    const readAndThink = 1200 + Math.random() * 800
+    const typing = Math.min(1200, sentence.length * (50 + Math.random() * 25))
+    return Math.floor(readAndThink + typing)
   }
-  // 后续句子连发：真实打字手速（每字 70~100ms）+ 句子间呼吸停顿 (300ms ~ 600ms)
-  const typeTime = sentence.length * (70 + Math.random() * 30)
-  const breatheTime = 300 + Math.random() * 300
-  return Math.min(2800, Math.max(600, Math.floor(typeTime + breatheTime)))
+  // 第二句：发送前停顿 (1000ms ~ 1800ms) + 敲完本句耗时
+  const pause = 1000 + Math.random() * 800
+  const typing = sentence.length * (60 + Math.random() * 25)
+  return Math.min(3500, Math.max(1200, Math.floor(pause + typing)))
 }

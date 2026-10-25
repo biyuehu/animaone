@@ -1,12 +1,101 @@
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { type Context, Symbols } from 'kotori-bot'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { HierarchicalMemoryService } from '../memory'
 import type { Ability } from './index'
 
 const execAsync = promisify(exec)
 
 export const SILENT_SENTINEL = '__NO_REPLY__'
+
+/**
+ * 网页抓取与搜索工具
+ */
+export function createWebSearchOrFetchAbility(proxy?: string): Ability {
+  return {
+    name: 'web_search_or_fetch',
+    description: '抓取指定 URL 网页的正文文本，或者通过 DuckDuckGo 搜索即时网络信息与摘要',
+    toolDefinition: {
+      ownerOnly: false,
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          url: { type: 'STRING', description: '需要直接抓取提取正文的完整网址（如 https://...）' },
+          query: { type: 'STRING', description: '需要搜索的关键词短语（如果不指定 url 时使用）' }
+        }
+      },
+      execute: async (args: { url?: string; query?: string }) => {
+        let agent: ProxyAgent | undefined
+        if (proxy) {
+          const proxyUrl = proxy.startsWith('http') ? proxy : `http://${proxy}`
+          agent = new ProxyAgent(proxyUrl)
+        }
+
+        // 1. 如果指定了 URL，直接抓取页面内容
+        if (args.url) {
+          try {
+            const resp = await undiciFetch(args.url, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
+              dispatcher: agent
+            })
+            const html = await resp.text()
+            // 简单剔除 script、style 与 html 标签，提取干净的正文前 2000 字
+            const cleanText = html
+              .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+              .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 2000)
+
+            return { url: args.url, title: resp.statusText, content: cleanText || '未提取到正文内容' }
+          } catch (e) {
+            return { error: `网页抓取失败: ${e instanceof Error ? e.message : String(e)}` }
+          }
+        }
+
+        // 2. 如果指定了 query，使用 DuckDuckGo Lite 进行即时搜索
+        if (args.query) {
+          try {
+            const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`
+            const resp = await undiciFetch(searchUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+              },
+              dispatcher: agent
+            })
+            const html = await resp.text()
+            // 正则匹配提取搜索结果标题与摘要 snippet
+            const snippetRegex = /<a class="result__snippet[^>]*>(.*?)<\/a>/g
+            const snippets: string[] = []
+            let match = snippetRegex.exec(html)
+            while (match !== null && snippets.length < 4) {
+              const text = match[1].replace(/<[^>]+>/g, '').trim()
+              if (text) snippets.push(text)
+              match = snippetRegex.exec(html)
+            }
+
+            if (snippets.length === 0) {
+              // 备选纯文本兜底提取
+              const fallback = html
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .slice(0, 1000)
+              return { query: args.query, results: [fallback] }
+            }
+
+            return { query: args.query, results: snippets }
+          } catch (e) {
+            return { error: `搜索执行失败: ${e instanceof Error ? e.message : String(e)}` }
+          }
+        }
+
+        return { error: '必须提供 url 或 query 参数' }
+      }
+    }
+  }
+}
 
 /**
  * 1. 即刻记忆工具：主动沉淀事实到 SQLite user_profiles

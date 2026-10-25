@@ -5,6 +5,7 @@ import {
   createCrossPlatformRecallAbility,
   createKotoriMessagingAbility,
   createRememberAbility,
+  createWebSearchOrFetchAbility,
   silenceAbility,
   terminalExecuteAbility
 } from './ability/tools'
@@ -51,6 +52,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(silenceAbility)
   abilityManager.register(createKotoriMessagingAbility(ctx))
+  abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
 
   const geminiClient = cfg.apiKey
     ? new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })

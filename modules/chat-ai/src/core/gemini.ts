@@ -67,9 +67,8 @@ export class GeminiClient {
       if (
         callName === 'choose_silence' ||
         (typeof toolResult === 'object' && toolResult !== null && (toolResult as any).silent)
-      ) {
+      )
         return '__NO_REPLY__'
-      }
 
       // 保留完整的 modelContent（包含 thoughtSignature 校验签名），避免 400 thought_signature 错误
       const modelTurn = modelContent ?? { role: 'model', parts: [{ functionCall: call }] }
@@ -86,10 +85,10 @@ export class GeminiClient {
         ],
         config: { systemInstruction: systemPrompt, temperature: 0.7 }
       })
-      return followUpResponse.text ?? '哼，搞定了，但我不想多说～'
+      return followUpResponse.text ?? '嗯，已经帮你处理好了～'
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return `切，调用 ${callName} 翻车了，报错信息是：${msg}。笨蛋大哥哥快去修修你的系统啦！`
+      return `哎呀，调用 ${callName} 时出了点状况：${msg}。大哥哥方便的话帮我看一下好吗？`
     }
   }
 }
