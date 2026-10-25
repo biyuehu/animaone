@@ -1,4 +1,4 @@
-import { type Context, Tsu } from 'kotori-bot'
+import { type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import { GeminiClient } from './core/gemini'
@@ -41,9 +41,21 @@ export function main(ctx: Context, cfg: Config) {
 
   const geminiClient = cfg.apiKey ? new GeminiClient({ apiKey: cfg.apiKey }) : null
 
+  // 优先级设置为 80（偏后），让指令系统及前置过滤/别名插件先行处理
   ctx.midware(async (next, session) => {
     const rawMessage = session.message?.trim()
-    if (!rawMessage || rawMessage.startsWith(session.api.adapter.config.commandPrefix)) return next()
+    const prefix = session.api?.adapter?.config?.commandPrefix ?? ctx.config.global.commandPrefix
+    if (!rawMessage || rawMessage.startsWith(prefix)) return next()
+
+    // 检查所有已注册指令的 shortcuts，若匹配则直接放行交由 command 系统执行
+    const commands = ctx[Symbols.command]
+    if (commands) {
+      for (const cmd of commands) {
+        for (const short of cmd.meta?.shortcut ?? []) {
+          if (rawMessage.startsWith(short)) return next()
+        }
+      }
+    }
 
     const adapter = session.api?.adapter
     const platform = adapter?.platform ?? ''
@@ -51,32 +63,40 @@ export function main(ctx: Context, cfg: Config) {
     const masterId = (adapter?.config as { master?: string } | undefined)?.master
 
     const userId = String(session.userId)
-    const channelId = session.channelId ? String(session.channelId) : undefined
+    const groupId = session.groupId ? String(session.groupId) : undefined
     const isOwner = masterId ? userId === String(masterId) : false
 
-    // 0. 网关判定（含顶层平台白名单与复合群聊拦截）
-    const decision = gateway.evaluate(userId, channelId, rawMessage, platform, masterId)
-    if (decision.reason === 'command_intercept' && decision.interceptResponse) return decision.interceptResponse
+    // 0. 网关判定（含顶层平台白名单与群聊拦截）
+    const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId)
+    if (decision.reason === 'command_intercept' && decision.interceptResponse) {
+      await session.quick(decision.interceptResponse)
+      return
+    }
     if (!decision.allow) return next()
 
     if (!geminiClient) {
-      return isOwner ? '欸？笨蛋大哥哥，你还没在配置里填 GEMINI_API_KEY 呢！快去填好再找我～' : next()
+      if (isOwner && !groupId) {
+        await session.quick('欸？笨蛋大哥哥，你还没在配置里填 GEMINI_API_KEY 呢！快去填好再找我～')
+      }
+      return next()
     }
 
     try {
       // OneBot 平台专属动态交互：收到消息时触发异步动作/指示
       if (platform === 'onebot' && typeof (adapter as any)?.call === 'function') {
         const onebot = adapter as any
-        if (channelId)
-          onebot.call('group_poke', { group_id: Number(channelId), user_id: Number(userId) }).catch(() => {})
-        else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
+        if (groupId) {
+          onebot.call('group_poke', { group_id: Number(groupId), user_id: Number(userId) }).catch(() => {})
+        } else {
+          onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
+        }
       }
 
       // 记忆作用域隔离（群聊物理隔离，主人认知全局统一于 __master__）
-      const scopeKey = channelId ? `${platform}:group:${channelId}` : `${platform}:private:${userId}`
+      const scopeKey = groupId ? `${platform}:group:${groupId}` : `${platform}:private:${userId}`
       const profileKey = isOwner ? '__master__' : `${platform}:${userId}`
 
-      const abilityCtx = { userId, channelId, isOwner, message: rawMessage }
+      const abilityCtx = { userId, groupId, isOwner, message: rawMessage }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
       extraContexts.push(...memory.assemblePromptContext(scopeKey, profileKey))
 
@@ -96,7 +116,7 @@ export function main(ctx: Context, cfg: Config) {
           identity,
           masterId,
           userId,
-          channelId,
+          groupId,
           isOwner
         },
         extraContexts
@@ -106,23 +126,20 @@ export function main(ctx: Context, cfg: Config) {
 
       memory.recordTurn(scopeKey, profileKey, rawMessage, reply)
 
-      // 拟人分句打字机发送
+      // 拟人分句打字机发送（首尾统一使用 session.quick 发送）
       const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
-      if (segments.length > 1) {
-        for (let i = 0; i < segments.length - 1; i++) {
-          await session.send(segments[i])
+      for (let i = 0; i < segments.length; i++) {
+        if (i > 0) {
           await delay(Math.min(1200, Math.max(400, segments[i].length * 40)))
         }
-        return segments[segments.length - 1]
+        await session.quick(segments[i])
       }
-
-      return reply
     } catch (err) {
-      console.error('Chat-AI execution error:', err instanceof Error ? err.message : err)
-      // 私聊对主人娇嗔抱怨报告异常，公开群聊保持绝对静默
-      return isOwner
-        ? `切，刚才脑子突然卡了一下（${err instanceof Error ? err.message : err}），本天才可没有出错！`
-        : next()
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      ctx.logger.error(`Failed to handle message: ${errorMsg}`)
+      if (isOwner && !groupId) {
+        await session.quick(`切，跟 Gemini 通讯翻车了：${errorMsg}。笨蛋大哥哥快去排查一下～`)
+      }
     }
-  }, 100)
+  }, 80)
 }

@@ -13,7 +13,7 @@ export interface PersonaRuntimeContext {
   readonly identity: string
   readonly masterId?: string | number
   readonly userId: string
-  readonly channelId?: string
+  readonly groupId?: string
   readonly isOwner: boolean
 }
 
@@ -82,7 +82,7 @@ export function buildSystemPrompt(
   }
 
   // 3. 关系与环境法则
-  const isGroup = Boolean(runtime.channelId)
+  const isGroup = Boolean(runtime.groupId)
   if (runtime.isOwner) {
     if (isGroup) {
       parts.push(replacePlaceholders(templates.ownerGroup ?? DEFAULT_OWNER_GROUP))
@@ -97,7 +97,7 @@ export function buildSystemPrompt(
   const now = new Date()
   const timeString = now.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
   let envSection = `【当前时间与环境感知】\n- 当前时间（北京时间）：${timeString}\n- 接入平台: ${runtime.platform}`
-  if (isGroup) envSection += `\n- 当前群聊: ${runtime.channelId}`
+  if (isGroup) envSection += `\n- 当前群聊: ${runtime.groupId}`
   parts.push(envSection)
 
   // 5. 记忆、画像与上下文注入

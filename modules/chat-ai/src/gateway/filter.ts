@@ -21,7 +21,7 @@ export interface GatewayConfig {
 export class MessageGateway {
   constructor(private readonly config: GatewayConfig) {}
 
-  public evaluate(userId: string, channelId?: string, message = '', platform = '', masterId?: string): GatewayDecision {
+  public evaluate(userId: string, groupId?: string, message = '', platform = '', masterId?: string): GatewayDecision {
     // 0. 顶层平台白名单拦截
     if (this.config.allowedPlatforms.length > 0 && (!platform || !this.config.allowedPlatforms.includes(platform))) {
       return { allow: false, reason: 'platform_rejected' }
@@ -40,16 +40,16 @@ export class MessageGateway {
     }
 
     // 2. 私聊逻辑：主人私聊直接放行，其他私聊直接忽略
-    if (!channelId) return isOwner ? { allow: true, reason: 'owner_direct' } : { allow: false, reason: 'rejected' }
+    if (!groupId) return isOwner ? { allow: true, reason: 'owner_direct' } : { allow: false, reason: 'rejected' }
 
     // 3. 群聊白名单检查（同时支持复合键 "platform:123" 或纯数字 "123"）
-    const scopedGroupKey = `${platform}:${channelId}`
-    if (this.config.whitelistedGroups.includes(channelId) || this.config.whitelistedGroups.includes(scopedGroupKey)) {
+    const scopedGroupKey = `${platform}:${groupId}`
+    if (this.config.whitelistedGroups.includes(groupId) || this.config.whitelistedGroups.includes(scopedGroupKey)) {
       return { allow: true, reason: 'whitelisted_group' }
     }
 
     // 4. 放养实验群概率抽样
-    if (this.config.experimentGroups.includes(channelId) || this.config.experimentGroups.includes(scopedGroupKey)) {
+    if (this.config.experimentGroups.includes(groupId) || this.config.experimentGroups.includes(scopedGroupKey)) {
       return Math.random() < this.config.experimentSampleRate
         ? { allow: true, reason: 'experiment_sampled' }
         : { allow: false, reason: 'rejected' }
