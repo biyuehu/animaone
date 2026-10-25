@@ -60,6 +60,15 @@ export class GeminiClient {
     const callName = call.name ?? ''
     try {
       const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
+
+      // 如果 AI 主动选择了沉默工具，直接返回静默标记
+      if (
+        callName === 'choose_silence' ||
+        (typeof toolResult === 'object' && toolResult !== null && (toolResult as any).silent)
+      ) {
+        return '__NO_REPLY__'
+      }
+
       const followUpResponse = await this.ai.models.generateContent({
         model: this.modelName,
         contents: [

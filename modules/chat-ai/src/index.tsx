@@ -1,10 +1,17 @@
 import { type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
+import {
+  createCrossPlatformRecallAbility,
+  createKotoriMessagingAbility,
+  createRememberAbility,
+  silenceAbility,
+  terminalExecuteAbility
+} from './ability/tools'
 import { DEFAULT_BOT_NAME, DEFAULT_OWNER_NICK } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
-import { delay, splitSentences } from './core/split'
+import { calculateTypingDelay, delay, splitSentences } from './core/split'
 import { MessageGateway } from './gateway/filter'
 import { HierarchicalMemoryService } from './memory'
 
@@ -39,6 +46,11 @@ export function main(ctx: Context, cfg: Config) {
   const memory = new HierarchicalMemoryService(cfg.apiKey, undefined, 20, cfg.proxy, cfg.modelName)
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
+  abilityManager.register(createRememberAbility(memory))
+  abilityManager.register(createCrossPlatformRecallAbility(memory))
+  abilityManager.register(terminalExecuteAbility)
+  abilityManager.register(silenceAbility)
+  abilityManager.register(createKotoriMessagingAbility(ctx))
 
   const geminiClient = cfg.apiKey
     ? new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })
@@ -60,14 +72,17 @@ export function main(ctx: Context, cfg: Config) {
     const platform = adapter?.platform ?? ''
     const identity = adapter?.identity ?? 'default'
     const masterId = (adapter?.config as { master?: string } | undefined)?.master
+    const botSelfId = String(adapter?.selfId ?? '')
 
     const userId = String(session.userId)
     const groupId = session.groupId ? String(session.groupId) : undefined
     const isOwner = masterId ? userId === String(masterId) : false
 
-    // 0. 网关判定（含顶层平台白名单与群聊拦截）
-    const decision = gateway.evaluate(userId, groupId, platform, masterId)
+    // 0. 网关判定（含艾特检测、名字提及、白名单与偶尔水群）
+    const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId, botSelfId, cfg.botName)
     if (!decision.allow) return next()
+
+    const targetMessage = decision.cleanedMessage ?? rawMessage
 
     if (!geminiClient) {
       if (isOwner && !groupId) {
@@ -91,9 +106,16 @@ export function main(ctx: Context, cfg: Config) {
       const scopeKey = groupId ? `${platform}:group:${groupId}` : `${platform}:private:${userId}`
       const profileKey = isOwner ? '__master__' : `${platform}:${userId}`
 
-      const abilityCtx = { userId, groupId, isOwner, message: rawMessage }
+      const abilityCtx = { userId, groupId, platform, identity, isOwner, message: targetMessage }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
       extraContexts.push(...memory.assemblePromptContext(scopeKey, profileKey))
+
+      // 如果是群聊日常偶尔插嘴，在提示词中追加提示：可以选择发言或保持沉默
+      if (decision.reason === 'group_casual') {
+        extraContexts.push(
+          '【群聊日常旁观提醒】你当前是路过偶尔围观群友聊天。如果你觉得他们的话题无聊或不想插嘴，请调用 choose_silence 工具保持静默；如果有想吐槽的，再做简短回应。'
+        )
+      }
 
       // 动态组装带“多态躯壳偏置”的人格 Prompt
       const systemPrompt = buildSystemPrompt(
@@ -117,15 +139,21 @@ export function main(ctx: Context, cfg: Config) {
         extraContexts
       )
       const history = memory.getShortTerm(scopeKey)
-      const reply = await geminiClient.chat(systemPrompt, history, rawMessage, abilityManager, abilityCtx)
+      const reply = await geminiClient.chat(systemPrompt, history, targetMessage, abilityManager, abilityCtx)
 
-      memory.recordTurn(scopeKey, profileKey, rawMessage, reply)
+      // 如果 AI 主动选择了沉默工具，则静默结束本次链路
+      if (!reply || reply === '__NO_REPLY__') {
+        return
+      }
 
-      // 拟人分句打字机发送（首尾统一使用 session.quick 发送）
+      memory.recordTurn(scopeKey, profileKey, targetMessage, reply)
+
+      // 拟人打字机分句与呼吸感延迟发送
       const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
       for (let i = 0; i < segments.length; i++) {
-        if (i > 0) {
-          await delay(Math.min(1200, Math.max(400, segments[i].length * 40)))
+        const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
+        if (delayTime > 0) {
+          await delay(delayTime)
         }
         await session.quick(segments[i])
       }

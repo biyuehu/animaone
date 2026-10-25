@@ -1,12 +1,15 @@
 export interface AbilityContext {
   readonly userId: string
-  readonly channelId?: string
+  readonly groupId?: string
+  readonly platform: string
+  readonly identity: string
   readonly isOwner: boolean
   readonly message: string
 }
 
 export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = unknown> {
   readonly parameters?: Record<string, unknown>
+  readonly ownerOnly?: boolean
   readonly execute: (args: Args, ctx: AbilityContext) => Promise<Result>
 }
 
@@ -43,10 +46,11 @@ export class AbilityManager {
     return list
   }
 
-  public getGeminiFunctionDeclarations(_isOwner: boolean): Record<string, unknown>[] {
+  public getGeminiFunctionDeclarations(isOwner: boolean): Record<string, unknown>[] {
     const declarations: Record<string, unknown>[] = []
     for (const ability of this.abilities.values()) {
       if (ability.toolDefinition) {
+        if (ability.toolDefinition.ownerOnly && !isOwner) continue
         declarations.push({
           name: ability.name,
           description: ability.description,

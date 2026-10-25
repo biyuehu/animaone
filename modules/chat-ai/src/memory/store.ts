@@ -177,6 +177,21 @@ export class MemoryDatabase {
     }
   }
 
+  public getAllRecentNodes(limit = 10, platformFilter?: string): MemoryNode[] {
+    if (platformFilter) {
+      return this.db
+        .prepare(
+          'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key LIKE ? ORDER BY end_time DESC LIMIT ?'
+        )
+        .all(`${platformFilter}:%`, limit) as unknown as MemoryNode[]
+    }
+    return this.db
+      .prepare(
+        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ORDER BY end_time DESC LIMIT ?'
+      )
+      .all(limit) as unknown as MemoryNode[]
+  }
+
   public getProfileFacts(userId: string, limit = 20): string[] {
     return (
       this.db

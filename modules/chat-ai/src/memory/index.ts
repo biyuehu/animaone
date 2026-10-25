@@ -41,6 +41,10 @@ export class HierarchicalMemoryService {
     return this.summarizer ? this.summarizer.dreamReflection(ownerId) : null
   }
 
+  public getDatabase(): MemoryDatabase {
+    return this.db
+  }
+
   public getShortTerm(scopeKey: string): { role: 'user' | 'model'; content: string }[] {
     return this.slidingWindow.getContext(scopeKey).map((m) => ({
       role: m.role,
