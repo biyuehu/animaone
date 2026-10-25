@@ -1,16 +1,32 @@
 import { GoogleGenAI } from '@google/genai'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { MemoryDatabase } from './store'
 
 type FactCategory = 'preference' | 'identity' | 'event' | 'relation'
 
 export class MemorySummarizer {
   private readonly ai: GoogleGenAI
+  private readonly modelName: string
 
   constructor(
     apiKey: string,
-    private readonly db: MemoryDatabase
+    private readonly db: MemoryDatabase,
+    proxy?: string,
+    modelName = 'gemini-3.5-flash-lite'
   ) {
-    this.ai = new GoogleGenAI({ apiKey })
+    this.modelName = modelName
+    let fetchFn: typeof fetch | undefined
+    if (proxy) {
+      const proxyUrl = proxy.startsWith('http') ? proxy : `http://${proxy}`
+      const agent = new ProxyAgent(proxyUrl)
+      // biome-ignore lint/suspicious/noExplicitAny: fetch override requires matching interface
+      fetchFn = ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher: agent })) as any
+    }
+
+    this.ai = new GoogleGenAI({
+      apiKey,
+      ...(fetchFn ? { httpOptions: { fetch: fetchFn } } : {})
+    })
   }
 
   public async compactChatHistory(
@@ -32,7 +48,7 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: this.modelName,
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { temperature: 0.3 }
       })
@@ -102,7 +118,7 @@ ${recentMessages.join('\n')}`
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: this.modelName,
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { temperature: 0.2 }
       })

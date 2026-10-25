@@ -20,7 +20,8 @@
     "kotori-bot": "^1.7.2"
   },
   "dependencies": {
-    "@google/genai": "^2.31.0"
+    "@google/genai": "^2.31.0",
+    "undici": "^8.12.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0"

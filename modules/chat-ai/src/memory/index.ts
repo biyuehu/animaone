@@ -9,11 +9,11 @@ export class HierarchicalMemoryService {
   private readonly summarizer: MemorySummarizer | null = null
   private readonly uncommittedCount: Map<string, number> = new Map()
 
-  constructor(apiKey?: string, dbPath?: string, maxTurns = 20) {
+  constructor(apiKey?: string, dbPath?: string, maxTurns = 20, proxy?: string, modelName?: string) {
     this.db = new MemoryDatabase(dbPath)
     this.slidingWindow = new SlidingWindowMemory(maxTurns)
     if (apiKey) {
-      this.summarizer = new MemorySummarizer(apiKey, this.db)
+      this.summarizer = new MemorySummarizer(apiKey, this.db, proxy, modelName)
     }
   }
 

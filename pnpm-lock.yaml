@@ -15,40 +15,43 @@ importers:
     dependencies:
       '@kotori-bot/kotori-plugin-access':
         specifier: ^1.0.2
-        version: 1.0.2(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.0.2
       '@kotori-bot/kotori-plugin-adapter-cmd':
         specifier: ^1.1.1
-        version: 1.1.1(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.1.1
       '@kotori-bot/kotori-plugin-adapter-onebot':
         specifier: link:../kotorijs/kotori-bot/modules/platform/adapter-onebot
         version: link:../kotorijs/kotori-bot/modules/platform/adapter-onebot
       '@kotori-bot/kotori-plugin-adapter-sandbox':
         specifier: ^1.1.1
-        version: 1.1.1(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.1.1
       '@kotori-bot/kotori-plugin-alias':
         specifier: ^1.0.3
-        version: 1.0.3(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.0.3
       '@kotori-bot/kotori-plugin-core':
         specifier: ^1.5.2
-        version: 1.6.0(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.6.0
       '@kotori-bot/kotori-plugin-filter':
         specifier: ^1.1.0
-        version: 1.1.0(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.1.0
       '@kotori-bot/kotori-plugin-helper':
         specifier: ^1.4.0
-        version: 1.4.0(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.4.0
       '@kotori-bot/kotori-plugin-status':
         specifier: ^1.0.0
-        version: 1.0.0(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.0.0
       '@kotori-bot/kotori-plugin-webui':
         specifier: ^1.5.3
-        version: 1.5.4(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.5.4
       kotori-bot:
         specifier: link:../kotorijs/kotori-bot/packages/kotori
         version: link:../kotorijs/kotori-bot/packages/kotori
       kotori-plugin-requester:
         specifier: ^1.1.3
-        version: 1.1.3(kotori-bot@kotorijs+kotori-bot+packages+kotori)
+        version: 1.1.3
+      undici:
+        specifier: ^8.12.3
+        version: 8.12.3
     devDependencies:
       '@biomejs/biome':
         specifier: 2.5.7
@@ -77,6 +80,9 @@ importers:
       kotori-bot:
         specifier: link:../../../kotorijs/kotori-bot/packages/kotori
         version: link:../../../kotorijs/kotori-bot/packages/kotori
+      undici:
+        specifier: ^8.12.3
+        version: 8.12.3
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^9.6.0
@@ -682,80 +688,65 @@ packages:
       '@jridgewell/sourcemap-codec': 1.6.0
     dev: true
 
-  /@kotori-bot/kotori-plugin-access@1.0.2(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-access@1.0.2:
     resolution: {integrity: sha512-ot+ZBGrQoeS0K7LJ2bZhvOY50GU2+MLk2RROdmukNrrD4fQqDSWSwRbt/StwPT9LAmKYaBi7Yw3ecLCMEbhfFQ==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-adapter-cmd@1.1.1(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-adapter-cmd@1.1.1:
     resolution: {integrity: sha512-SGIKesJiry5vM15/oHjC3UF0PIO/N8gn1/yNjTnl7hXYIPthI1xVbCUtNrR/LAu5eUb6cYHlJ5ai862PuTjCRA==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-adapter-sandbox@1.1.1(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-adapter-sandbox@1.1.1:
     resolution: {integrity: sha512-PeiFEBqGySGdoCMls36HzeXDOrC8MMDWR0eyqwt0jkw2hD3DYuoAusujsnmP912u4GhtfMzGMhgPLsXYEiyQNw==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
       zod: 4.6.7
     dev: false
 
-  /@kotori-bot/kotori-plugin-alias@1.0.3(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-alias@1.0.3:
     resolution: {integrity: sha512-nGc/xFXer7K8jD0qoeoYPC9yV7E8pzuX7+NLDe9DRwnEfNqH+XFlpuoKP1z0ZVUQF6ixPVYh16VOXVriSIS36w==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-core@1.6.0(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-core@1.6.0:
     resolution: {integrity: sha512-hMQ5YqbXNEQ7ldvv4p13l5QAvtnZh+4zqNh0CKZ0G8Uqc0WW0o7T2DBzCtJTvkImsjCDoSCoxFkeHKKoUGI4Mg==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-filter@1.1.0(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-filter@1.1.0:
     resolution: {integrity: sha512-nYwvMmWuytkeSyTjmn4/BuOso2/mrywDc0g/Fhju3YMBMlqMrfRSfqG1zAfJgTml8fJ9XcINVYjYV5SG9uUPGw==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dependencies:
       '@types/picomatch': 2.3.4
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
       picomatch: 4.0.7
     dev: false
 
-  /@kotori-bot/kotori-plugin-helper@1.4.0(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-helper@1.4.0:
     resolution: {integrity: sha512-qwOAH9wI5m5OeDRMSP5IPhoT0Xs61Rg+PQKiyYHIxmAVE05EVD1qsoejYnIet6ukfbGf6t9W8MZ5vZKqXV8G3w==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-status@1.0.0(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-status@1.0.0:
     resolution: {integrity: sha512-ij6SK9MbHMtIJqMCOA1dAtFM6YI2xq9MDEt5pcl6vV8AbKXeeh3k3epWufPdVXH4GQJpDrLJzWGJY8CF9Bcjcg==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
-  /@kotori-bot/kotori-plugin-webui@1.5.4(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /@kotori-bot/kotori-plugin-webui@1.5.4:
     resolution: {integrity: sha512-Kzw4GQlWJodzs2rJIKHhCMLQMTI5x6PnlSpPs/Fv6M/BDexedbxchZJ7Pc2gGKSoh2Y5cEChycRs1tvFThEp2A==}
     peerDependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dependencies:
-      '@kotori-bot/kotori-plugin-filter': 1.1.0(kotori-bot@kotorijs+kotori-bot+packages+kotori)
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
+      '@kotori-bot/kotori-plugin-filter': 1.1.0
     dev: false
 
   /@napi-rs/lzma-linux-x64-gnu@1.5.1:
@@ -1579,11 +1570,9 @@ packages:
       safe-buffer: 5.2.1
     dev: false
 
-  /kotori-plugin-requester@1.1.3(kotori-bot@kotorijs+kotori-bot+packages+kotori):
+  /kotori-plugin-requester@1.1.3:
     resolution: {integrity: sha512-6noPdXn7vzhHf+maH7OcSfn1ikiO0zzOgbHj0huyFOMRnLVIsRomio6LtRzPAvWArr5L/MYHoOhFyGY67noMHw==}
     peerDependencies:
-      kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
-    dependencies:
       kotori-bot: link:../kotorijs/kotori-bot/packages/kotori
     dev: false
 
@@ -1999,6 +1988,11 @@ packages:
 
   /undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
+
+  /undici@8.12.3:
+    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+    engines: {node: '>=22.19.0'}
+    dev: false
 
   /web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}

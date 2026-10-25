@@ -1,9 +1,11 @@
 import { GoogleGenAI } from '@google/genai'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { AbilityContext, AbilityManager } from '../ability'
 
 export interface GeminiClientConfig {
   readonly apiKey: string
   readonly modelName?: string
+  readonly proxy?: string
 }
 
 export class GeminiClient {
@@ -11,8 +13,20 @@ export class GeminiClient {
   private readonly modelName: string
 
   constructor(config: GeminiClientConfig) {
-    this.ai = new GoogleGenAI({ apiKey: config.apiKey })
-    this.modelName = config.modelName ?? 'gemini-2.5-flash'
+    this.modelName = config.modelName ?? 'gemini-3.5-flash-lite'
+
+    let fetchFn: typeof fetch | undefined
+    if (config.proxy) {
+      const proxyUrl = config.proxy.startsWith('http') ? config.proxy : `http://${config.proxy}`
+      const agent = new ProxyAgent(proxyUrl)
+      // biome-ignore lint/suspicious/noExplicitAny: fetch override requires matching interface
+      fetchFn = ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher: agent })) as any
+    }
+
+    this.ai = new GoogleGenAI({
+      apiKey: config.apiKey,
+      ...(fetchFn ? { httpOptions: { fetch: fetchFn } } : {})
+    })
   }
 
   public async chat(

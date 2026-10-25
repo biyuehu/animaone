@@ -9,6 +9,8 @@ import { HierarchicalMemoryService } from './memory'
 
 export const config = Tsu.Object({
   apiKey: Tsu.String().default(process.env.GEMINI_API_KEY ?? ''),
+  modelName: Tsu.String().default('gemini-3.5-flash-lite'),
+  proxy: Tsu.String().optional(),
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
   experimentGroups: Tsu.Array(Tsu.String()).default([]),
   experimentSampleRate: Tsu.Number().range(0, 1).default(0.05),
@@ -35,27 +37,25 @@ export function main(ctx: Context, cfg: Config) {
     allowedPlatforms: cfg.allowedPlatforms
   })
 
-  const memory = new HierarchicalMemoryService(cfg.apiKey)
+  const memory = new HierarchicalMemoryService(cfg.apiKey, undefined, 20, cfg.proxy, cfg.modelName)
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
 
-  const geminiClient = cfg.apiKey ? new GeminiClient({ apiKey: cfg.apiKey }) : null
+  const geminiClient = cfg.apiKey
+    ? new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })
+    : null
 
-  // 优先级设置为 80（偏后），让指令系统及前置过滤/别名插件先行处理
   ctx.midware(async (next, session) => {
+    if (session.channelId || session.guildId) return next()
+
     const rawMessage = session.message?.trim()
     const prefix = session.api?.adapter?.config?.commandPrefix ?? ctx.config.global.commandPrefix
     if (!rawMessage || rawMessage.startsWith(prefix)) return next()
 
-    // 检查所有已注册指令的 shortcuts，若匹配则直接放行交由 command 系统执行
     const commands = ctx[Symbols.command]
-    if (commands) {
-      for (const cmd of commands) {
-        for (const short of cmd.meta?.shortcut ?? []) {
-          if (rawMessage.startsWith(short)) return next()
-        }
-      }
-    }
+    if (commands)
+      for (const cmd of commands)
+        for (const short of cmd.meta?.shortcut ?? []) if (rawMessage.startsWith(short)) return next()
 
     const adapter = session.api?.adapter
     const platform = adapter?.platform ?? ''
@@ -141,5 +141,5 @@ export function main(ctx: Context, cfg: Config) {
         await session.quick(`切，跟 Gemini 通讯翻车了：${errorMsg}。笨蛋大哥哥快去排查一下～`)
       }
     }
-  }, 80)
+  }, 100)
 }
