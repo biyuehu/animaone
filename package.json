@@ -8,12 +8,10 @@
   "scripts": {
     "serve": "kotori",
     "build": "tsx build --types --ignoreError",
-    "dev:only": "tsx build --silent && kotori",
+    "dev:only": "tsx build --silent && tsx node_modules/kotori-bot/bin --mode dev",
     "dev": "nodemon --watch",
     "pub": "pnpm -r publish --no-git-checks --access public",
-    "fix": "biome check --write",
-    "bot": "cd bot && napcat.bat",
-    "bot:quick": "cd bot && napcat.quick.bat"
+    "fix": "biome check --write"
   },
   "files": [
     "{packages,modules}/**/*/locales/**/*",
@@ -64,5 +62,12 @@
     "@kotori-bot/kotori-plugin-webui": "^1.5.3",
     "kotori-bot": "^1.7.6",
     "kotori-plugin-requester": "^1.1.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "@kotori-bot/kotori-plugin-adapter-onebot": "link:../kotorijs/kotori-bot/modules/platform/adapter-onebot",
+      "@kotori-bot/loader": "link:../kotorijs/kotori-bot/packages/loader",
+      "kotori-bot": "link:../kotorijs/kotori-bot/packages/kotori"
+    }
   }
 }

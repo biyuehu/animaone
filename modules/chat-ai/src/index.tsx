@@ -15,6 +15,11 @@ export const config = Tsu.Object({
   commandPrefix: Tsu.String().default('/'),
   botName: Tsu.String().default('露米 (Romi)'),
   ownerNick: Tsu.String().default('大哥哥'),
+  basePersona: Tsu.String().optional(),
+  ownerPrivate: Tsu.String().optional(),
+  ownerGroup: Tsu.String().optional(),
+  guestGroup: Tsu.String().optional(),
+  platformAspects: Tsu.Object({}).default({}),
   enableHumanDelay: Tsu.Boolean().default(true),
   allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot'])
 })
@@ -38,7 +43,7 @@ export function main(ctx: Context, cfg: Config) {
 
   ctx.midware(async (next, session) => {
     const rawMessage = session.message?.trim()
-    if (!rawMessage) return next()
+    if (!rawMessage || rawMessage.startsWith(session.api.adapter.config.commandPrefix)) return next()
 
     const adapter = session.api?.adapter
     const platform = adapter?.platform ?? ''
@@ -77,8 +82,23 @@ export function main(ctx: Context, cfg: Config) {
 
       // 动态组装带“多态躯壳偏置”的人格 Prompt
       const systemPrompt = buildSystemPrompt(
-        { botName: cfg.botName, ownerNick: cfg.ownerNick, platform, identity },
-        isOwner,
+        {
+          botName: cfg.botName,
+          ownerNick: cfg.ownerNick,
+          basePersona: cfg.basePersona,
+          ownerPrivate: cfg.ownerPrivate,
+          ownerGroup: cfg.ownerGroup,
+          guestGroup: cfg.guestGroup,
+          platformAspects: cfg.platformAspects as Record<string, string>
+        },
+        {
+          platform,
+          identity,
+          masterId,
+          userId,
+          channelId,
+          isOwner
+        },
         extraContexts
       )
       const history = memory.getShortTerm(scopeKey)
@@ -104,5 +124,5 @@ export function main(ctx: Context, cfg: Config) {
         ? `切，刚才脑子突然卡了一下（${err instanceof Error ? err.message : err}），本天才可没有出错！`
         : next()
     }
-  })
+  }, 100)
 }
