@@ -1,4 +1,4 @@
-export function splitSentences(text: string, minLength = 8, maxLength = 45): string[] {
+export function splitSentences(text: string, minLength = 6, maxLength = 35): string[] {
   // 保持代码块等特殊结构完整，不打碎代码
   if (text.includes('```')) return [text.trim()]
 
@@ -42,16 +42,20 @@ export function splitSentences(text: string, minLength = 8, maxLength = 45): str
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * 拟人打字延迟计算
- * @param sentence 本句文本
- * @param isFirstSentence 是否为回复的第一句话
+ * 拟真活人打字延迟计算：
+ * 1. 收到消息后需要“看懂 + 思考”时间（800ms ~ 1600ms）；
+ * 2. 敲击键盘需要真实打字时间（每字 70ms ~ 110ms），模拟人类真实输入手速；
+ * 3. 发送前后带有呼吸微停顿。
  */
 export function calculateTypingDelay(sentence: string, isFirstSentence = false): number {
   if (isFirstSentence) {
-    // 模拟真人阅读、思考准备的起手微停顿 (500ms ~ 1100ms)
-    return Math.floor(500 + Math.random() * 600)
+    // 首句起手阅读与组织语言耗时 (800ms ~ 1500ms) + 首句极少数字敲击
+    const thinkTime = 800 + Math.random() * 700
+    const typeTime = Math.min(1000, sentence.length * (60 + Math.random() * 30))
+    return Math.floor(thinkTime + typeTime)
   }
-  // 模拟真实手速敲键盘 (每字 40~65ms) + 标点微停顿，上限 1600ms
-  const lengthTime = sentence.length * (40 + Math.random() * 25)
-  return Math.min(1600, Math.max(350, Math.floor(lengthTime)))
+  // 后续句子连发：真实打字手速（每字 70~100ms）+ 句子间呼吸停顿 (300ms ~ 600ms)
+  const typeTime = sentence.length * (70 + Math.random() * 30)
+  const breatheTime = 300 + Math.random() * 300
+  return Math.min(2800, Math.max(600, Math.floor(typeTime + breatheTime)))
 }
