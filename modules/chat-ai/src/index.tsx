@@ -117,6 +117,13 @@ export function main(ctx: Context, cfg: Config) {
         )
       }
 
+      // 如果是群聊日常偶尔插嘴，在提示词中追加提示：可以选择发言或保持沉默
+      if (decision.reason === 'group_casual') {
+        extraContexts.push(
+          '【群聊日常旁观提醒】你当前是路过偶尔围观群友聊天。如果你觉得他们的话题无聊或不想插嘴，请调用 choose_silence 工具保持静默；如果有想吐槽的，再做简短回应。'
+        )
+      }
+
       // 动态组装带“多态躯壳偏置”的人格 Prompt
       const systemPrompt = buildSystemPrompt(
         {

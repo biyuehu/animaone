@@ -58,6 +58,8 @@ export class GeminiClient {
 
     const call = functionCalls[0]
     const callName = call.name ?? ''
+    const modelContent = response.candidates?.[0]?.content
+
     try {
       const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
 
@@ -69,11 +71,14 @@ export class GeminiClient {
         return '__NO_REPLY__'
       }
 
+      // 保留完整的 modelContent（包含 thoughtSignature 校验签名），避免 400 thought_signature 错误
+      const modelTurn = modelContent ?? { role: 'model', parts: [{ functionCall: call }] }
+
       const followUpResponse = await this.ai.models.generateContent({
         model: this.modelName,
         contents: [
           ...contents,
-          { role: 'model', parts: [{ functionCall: call }] },
+          modelTurn,
           {
             role: 'user',
             parts: [{ functionResponse: { name: callName, response: { result: toolResult } } }]

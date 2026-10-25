@@ -21,6 +21,10 @@ export class HierarchicalMemoryService {
     this.slidingWindow.addMessage(scopeKey, 'user', userMsg)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
 
+    // 同步持久化写入 SQLite，确保关机重启原话不丢失
+    this.db.saveRecentMessage(scopeKey, 'user', userMsg)
+    this.db.saveRecentMessage(scopeKey, 'model', modelMsg)
+
     const count = (this.uncommittedCount.get(scopeKey) ?? 0) + 1
     this.uncommittedCount.set(scopeKey, count)
 
@@ -46,15 +50,19 @@ export class HierarchicalMemoryService {
   }
 
   public getShortTerm(scopeKey: string): { role: 'user' | 'model'; content: string }[] {
+    // 首次读取该会话时，若内存滑窗为空，自动从 SQLite 恢复持久化的历史记录
+    if (!this.slidingWindow.has(scopeKey)) {
+      const persisted = this.db.loadRecentMessages(scopeKey, 20)
+      this.slidingWindow.loadInitialMessages(scopeKey, persisted)
+    }
+
     return this.slidingWindow.getContext(scopeKey).map((m) => ({
       role: m.role,
       content: m.content
     }))
   }
 
-  // 构建带“顺藤摸瓜联想”与“主人全局画像”的上下文
   public assemblePromptContext(scopeKey: string, userId: string): string[] {
-    // 顺藤摸瓜：带出关联图谱节点
     const pyramidNodes = this.db.getPyramidMemories(scopeKey, 8)
     const profileFacts = this.db.getProfileFacts(userId, 15)
     const { memoryBlock, profileBlock } = formatAndTruncateMemory(pyramidNodes, profileFacts)

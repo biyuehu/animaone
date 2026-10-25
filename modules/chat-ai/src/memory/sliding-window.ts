@@ -35,6 +35,14 @@ export class SlidingWindowMemory {
     return this.history.get(scopeKey) || []
   }
 
+  has(scopeKey: string): boolean {
+    return this.history.has(scopeKey)
+  }
+
+  loadInitialMessages(scopeKey: string, messages: ChatMessage[]): void {
+    this.history.set(scopeKey, [...messages])
+  }
+
   clear(scopeKey: string): void {
     this.history.delete(scopeKey)
   }

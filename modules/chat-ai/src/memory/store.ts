@@ -75,6 +75,16 @@ export class MemoryDatabase {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_profile_user ON user_profiles(user_id);
+
+      -- 短期多轮对话持久化表（防止重启后失忆）
+      CREATE TABLE IF NOT EXISTS recent_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope_key TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_recent_scope ON recent_messages(scope_key);
     `)
   }
 
@@ -198,5 +208,33 @@ export class MemoryDatabase {
         .prepare('SELECT fact FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?')
         .all(userId, limit) as { fact: string }[]
     ).map((r) => r.fact)
+  }
+
+  public saveRecentMessage(scopeKey: string, role: 'user' | 'model', content: string): void {
+    this.db
+      .prepare('INSERT INTO recent_messages (scope_key, role, content, created_at) VALUES (?, ?, ?, ?)')
+      .run(scopeKey, role, content, Date.now())
+
+    // 保持每个 scope 最多保留 30 条最近消息
+    this.db
+      .prepare(`
+        DELETE FROM recent_messages 
+        WHERE scope_key = ? AND id NOT IN (
+          SELECT id FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT 30
+        )
+      `)
+      .run(scopeKey, scopeKey)
+  }
+
+  public loadRecentMessages(
+    scopeKey: string,
+    limit = 20
+  ): { role: 'user' | 'model'; content: string; timestamp: number }[] {
+    const rows = this.db
+      .prepare(
+        'SELECT role, content, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
+      )
+      .all(scopeKey, limit) as { role: 'user' | 'model'; content: string; timestamp: number }[]
+    return rows.reverse()
   }
 }
