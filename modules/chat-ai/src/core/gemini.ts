@@ -38,57 +38,88 @@ export class GeminiClient {
   ): Promise<string> {
     const isOwner = abilityCtx?.isOwner ?? false
     const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isOwner) : []
-    const contents = [
+    const contents: any[] = [
       ...history.map((h) => ({ role: h.role, parts: [{ text: h.content }] })),
       { role: 'user', parts: [{ text: newMessage }] }
     ]
 
-    const response = await this.ai.models.generateContent({
-      model: this.modelName,
-      contents,
-      config: {
-        systemInstruction: systemPrompt,
-        temperature: 0.7,
-        ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
-      }
-    })
+    const MAX_TOOL_LOOPS = 5
+    let loops = 0
 
-    const functionCalls = response.functionCalls
-    if (!functionCalls?.length || !abilityManager || !abilityCtx) return response.text ?? '……'
-
-    const call = functionCalls[0]
-    const callName = call.name ?? ''
-    const modelContent = response.candidates?.[0]?.content
-
-    try {
-      const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
-
-      // 如果 AI 主动选择了沉默工具，直接返回静默标记
-      if (
-        callName === 'choose_silence' ||
-        (typeof toolResult === 'object' && toolResult !== null && (toolResult as any).silent)
-      )
-        return '__NO_REPLY__'
-
-      // 保留完整的 modelContent（包含 thoughtSignature 校验签名），避免 400 thought_signature 错误
-      const modelTurn = modelContent ?? { role: 'model', parts: [{ functionCall: call }] }
-
-      const followUpResponse = await this.ai.models.generateContent({
+    while (loops < MAX_TOOL_LOOPS) {
+      loops++
+      const response = await this.ai.models.generateContent({
         model: this.modelName,
-        contents: [
-          ...contents,
-          modelTurn,
-          {
-            role: 'user',
-            parts: [{ functionResponse: { name: callName, response: { result: toolResult } } }]
-          }
-        ],
-        config: { systemInstruction: systemPrompt, temperature: 0.7 }
+        contents,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.7,
+          ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
+        }
       })
-      return followUpResponse.text ?? '嗯，已经帮你处理好了～'
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return `哎呀，调用 ${callName} 时出了点状况：${msg}。大哥哥方便的话帮我看一下好吗？`
+
+      const functionCalls = response.functionCalls
+      // 如果没有工具调用，说明模型生成了最终回复文本
+      if (!functionCalls?.length || !abilityManager || !abilityCtx) {
+        // 安全提取文本部件，避免在带有非文本 parts 时触发官方 SDK 的 console.warn
+        const candidate = response.candidates?.[0]
+        const textParts = candidate?.content?.parts?.filter((p: any) => typeof p.text === 'string') ?? []
+        if (textParts.length > 0) {
+          return textParts
+            .map((p: any) => p.text)
+            .join('')
+            .trim()
+        }
+        return response.text?.trim() || '……'
+      }
+
+      // 执行当前这轮的所有工具调用
+      const modelContent = response.candidates?.[0]?.content
+      // 保留完整的 modelContent（包含 thoughtSignature 校验签名），避免 400 thought_signature 错误
+      const modelTurn = modelContent ?? {
+        role: 'model',
+        parts: functionCalls.map((call) => ({ functionCall: call }))
+      }
+      contents.push(modelTurn)
+
+      let hasSilence = false
+      const functionResponseParts: any[] = []
+
+      for (const call of functionCalls) {
+        const callName = call.name ?? ''
+        try {
+          const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
+          if (
+            callName === 'choose_silence' ||
+            (typeof toolResult === 'object' && toolResult !== null && (toolResult as any).silent)
+          ) {
+            hasSilence = true
+            break
+          }
+          functionResponseParts.push({
+            functionResponse: { name: callName, response: { result: toolResult } }
+          })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          functionResponseParts.push({
+            functionResponse: { name: callName, response: { error: msg } }
+          })
+        }
+      }
+
+      // 如果模型主动选择了保持沉默
+      if (hasSilence) {
+        return '__NO_REPLY__'
+      }
+
+      // 回填所有工具执行结果，准备进入下一轮生成
+      contents.push({
+        role: 'user',
+        parts: functionResponseParts
+      })
     }
+
+    // 循环超过上限时的兜底回复，不再使用固定死板的“嗯，已经帮你处理好了～”
+    return '好啦，已经替你确认并整理好了。'
   }
 }

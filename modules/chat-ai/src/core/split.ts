@@ -1,42 +1,47 @@
 /**
  * 拟真分句：
- * - 绝大多数普通闲聊（60 字以内）直接整段发一条，绝不切碎成 3~4 句轰炸刷屏；
- * - 仅在有明显换行（\n\n）或字数较长且有明确段落感时，才最多切为 2 句。
+ * - 绝大多数普通闲聊直接整段发一条，绝不切碎成多句轰炸刷屏；
+ * - 仅在字数确实较长（>70 字）且有非常明确的换行段落时，最多拆分成 2 句；
+ * - 会自动清洗掉多余的连续空行与首尾空白，避免单条消息内部出现怪异的大空行。
  */
 export function splitSentences(text: string): string[] {
-  const trimmed = text.trim()
-  if (!trimmed) return []
+  // 先把文本里可能存在的 3 个及以上连续换行压缩为双换行，去掉多余空洞
+  const cleaned = text.replace(/\n{3,}/g, '\n\n').trim()
+  if (!cleaned) return []
 
   // 保持代码块完整
-  if (trimmed.includes('```')) return [trimmed]
+  if (cleaned.includes('```')) return [cleaned]
 
-  // 如果原本就不长（60 字以内），或者没有明显的段落，直接发 1 条，最具人类自然感
-  if (trimmed.length <= 60 && !trimmed.includes('\n\n')) {
-    return [trimmed]
+  // 如果原本就不长（70 字以内），直接发 1 条，最具人类自然感（即使内部有换行，也只压成一条发）
+  if (cleaned.length <= 70) {
+    // 把内部空行压紧为单换行，真人打字在同条消息里不会留大片空行
+    return [cleaned.replace(/\n\s*\n/g, '\n')]
   }
 
-  // 尝试优先按双换行或段落分
-  if (trimmed.includes('\n\n')) {
-    const parts = trimmed
-      .split(/\n\s*\n/)
+  // 超过 70 字且包含换行段落时，按段落拆分（最多拆 2 条消息）
+  if (cleaned.includes('\n')) {
+    const parts = cleaned
+      .split(/\n+/)
       .map((p) => p.trim())
       .filter(Boolean)
-    if (parts.length <= 2) return parts
-    // 最多 2 句，剩下的合并为第 2 句，严禁连发 3 条以上
-    return [parts[0], parts.slice(1).join('\n\n')]
+    if (parts.length === 1) return parts
+    // 第 1 句发第一段，剩下的合并为第 2 句（内部多余空行合为单换行）
+    return [parts[0], parts.slice(1).join('\n')]
   }
 
-  // 如果字数超过 60 字，在句号/感叹号处寻找一次天然切分点（最多拆成 2 句）
-  const splitIndex = trimmed.search(/[。！？!?…~](\s*)/)
-  if (splitIndex > 10 && splitIndex < trimmed.length - 10) {
-    const first = trimmed.slice(0, splitIndex + 1).trim()
-    const second = trimmed.slice(splitIndex + 1).trim()
-    if (first && second) {
-      return [first, second]
+  // 如果是一大坨长文本（超过 80 字）且没有换行，在句号/感叹号处寻找一次天然切分点（最多拆成 2 句）
+  if (cleaned.length > 80) {
+    const splitIndex = cleaned.search(/[。！？!?](\s*)/)
+    if (splitIndex > 15 && splitIndex < cleaned.length - 15) {
+      const first = cleaned.slice(0, splitIndex + 1).trim()
+      const second = cleaned.slice(splitIndex + 1).trim()
+      if (first && second) {
+        return [first, second]
+      }
     }
   }
 
-  return [trimmed]
+  return [cleaned]
 }
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))

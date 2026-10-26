@@ -85,6 +85,13 @@ export class MemoryDatabase {
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_recent_scope ON recent_messages(scope_key);
+
+      -- 插件系统元数据表（存储首次启动时间等核心档案）
+      CREATE TABLE IF NOT EXISTS bot_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `)
   }
 
@@ -236,5 +243,59 @@ export class MemoryDatabase {
       )
       .all(scopeKey, limit) as { role: 'user' | 'model'; content: string; timestamp: number }[]
     return rows.reverse()
+  }
+
+  /**
+   * 记录并获取 AI Bot 第一次诞生的时间（首次写入后永不改变）
+   */
+  public getOrCreateBirthTime(): number {
+    const row = this.db.prepare('SELECT value FROM bot_metadata WHERE key = ?').get('birth_time') as
+      | { value: string }
+      | undefined
+    if (row?.value) {
+      return Number(row.value)
+    }
+    const now = Date.now()
+    this.db
+      .prepare('INSERT INTO bot_metadata (key, value, created_at) VALUES (?, ?, ?)')
+      .run('birth_time', String(now), now)
+    return now
+  }
+
+  /**
+   * 深度回溯历史对话与记忆（翻旧账能力）：
+   * 支持按关键字搜索或时间倒序分页调取更久远之前的原话记录
+   */
+  public searchDeepHistory(
+    scopeKey: string,
+    options: { keyword?: string; limit?: number; offset?: number } = {}
+  ): { role: string; content: string; time: string }[] {
+    const limit = options.limit ?? 10
+    const offset = options.offset ?? 0
+
+    let rows: { role: string; content: string; created_at: number }[] = []
+    if (options.keyword) {
+      rows = this.db
+        .prepare(
+          'SELECT role, content, created_at FROM recent_messages WHERE scope_key = ? AND content LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?'
+        )
+        .all(scopeKey, `%${options.keyword}%`, limit, offset) as {
+        role: string
+        content: string
+        created_at: number
+      }[]
+    } else {
+      rows = this.db
+        .prepare(
+          'SELECT role, content, created_at FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ? OFFSET ?'
+        )
+        .all(scopeKey, limit, offset) as { role: string; content: string; created_at: number }[]
+    }
+
+    return rows.map((r) => ({
+      role: r.role,
+      content: r.content,
+      time: new Date(r.created_at).toLocaleString('zh-CN')
+    }))
   }
 }

@@ -5,6 +5,7 @@ import {
   createCrossPlatformRecallAbility,
   createKotoriMessagingAbility,
   createRememberAbility,
+  createSearchPastMemoriesAbility,
   createWebSearchOrFetchAbility,
   silenceAbility,
   terminalExecuteAbility
@@ -49,6 +50,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
   abilityManager.register(createCrossPlatformRecallAbility(memory))
+  abilityManager.register(createSearchPastMemoriesAbility(memory))
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(silenceAbility)
   abilityManager.register(createKotoriMessagingAbility(ctx))
@@ -143,7 +145,8 @@ export function main(ctx: Context, cfg: Config) {
           masterId,
           userId,
           groupId,
-          isOwner
+          isOwner,
+          birthTime: memory.getBirthTime()
         },
         extraContexts
       )

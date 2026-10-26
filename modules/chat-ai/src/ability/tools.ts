@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 import { type Context, Symbols } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { HierarchicalMemoryService } from '../memory'
-import type { Ability } from './index'
+import type { Ability, AbilityContext } from './index'
 
 const execAsync = promisify(exec)
 
@@ -160,6 +160,58 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
             summary: n.summary,
             tags: n.tags,
             time: new Date(n.endTime).toLocaleString('zh-CN')
+          }))
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 2.5 深度回溯历史记忆与对话（翻旧账能力）：
+ * 当对方反复追问“之前我们聊了什么”、“更早之前说了啥”、或询问某个特定旧话题时使用
+ */
+export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryService): Ability {
+  return {
+    name: 'search_past_memories',
+    description: '深入翻阅数据库中更久远的历史原话与记忆摘要。当需要回忆多轮以前、几天前或特定关键词的旧对话时使用',
+    toolDefinition: {
+      ownerOnly: false,
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          keyword: {
+            type: 'STRING',
+            description: '可选的关键词或主题，用于在历史记录中快速检索'
+          },
+          offset: {
+            type: 'INTEGER',
+            description: '偏移量。如果需要回溯更早更深的历史，可以传入 10、20 等逐步深入'
+          },
+          limit: {
+            type: 'INTEGER',
+            description: '期望调取的条数，建议 5~10'
+          }
+        }
+      },
+      execute: async (args: { keyword?: string; offset?: number; limit?: number }, ctx?: AbilityContext) => {
+        const scopeKey = ctx ? `${ctx.platform}:${ctx.groupId ? `group:${ctx.groupId}` : `private:${ctx.userId}`}` : ''
+        if (!scopeKey) return { error: '无法获取当前会话上下文' }
+
+        const messages = memory.getDatabase().searchDeepHistory(scopeKey, {
+          keyword: args.keyword,
+          offset: args.offset ?? 0,
+          limit: args.limit ?? 8
+        })
+
+        const nodes = memory.getDatabase().getPyramidMemories(scopeKey, 5)
+
+        return {
+          recalledMessages: messages,
+          relatedSummaries: nodes.map((n) => ({
+            time: new Date(n.startTime).toLocaleDateString('zh-CN'),
+            level: n.level,
+            summary: n.summary
           }))
         }
       }

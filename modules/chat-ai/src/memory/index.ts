@@ -49,6 +49,10 @@ export class HierarchicalMemoryService {
     return this.db
   }
 
+  public getBirthTime(): number {
+    return this.db.getOrCreateBirthTime()
+  }
+
   public getShortTerm(scopeKey: string): { role: 'user' | 'model'; content: string }[] {
     // 首次读取该会话时，若内存滑窗为空，自动从 SQLite 恢复持久化的历史记录
     if (!this.slidingWindow.has(scopeKey)) {
