@@ -1,3 +1,4 @@
+import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
 import { type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
@@ -7,6 +8,7 @@ import {
   createRememberAbility,
   createSearchPastMemoriesAbility,
   createWebSearchOrFetchAbility,
+  fileReadOrWriteAbility,
   silenceAbility,
   terminalExecuteAbility
 } from './ability/tools'
@@ -32,7 +34,8 @@ export const config = Tsu.Object({
   guestGroup: Tsu.String().optional(),
   platformAspects: Tsu.Object({}).default({}),
   enableHumanDelay: Tsu.Boolean().default(true),
-  allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot'])
+  allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot']),
+  maxToolLoops: Tsu.Number().default(5)
 })
 
 type Config = Tsu.infer<typeof config>
@@ -52,6 +55,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(createCrossPlatformRecallAbility(memory))
   abilityManager.register(createSearchPastMemoriesAbility(memory))
   abilityManager.register(terminalExecuteAbility)
+  abilityManager.register(fileReadOrWriteAbility)
   abilityManager.register(silenceAbility)
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
@@ -97,8 +101,8 @@ export function main(ctx: Context, cfg: Config) {
 
     try {
       // OneBot 平台专属动态交互：收到消息时触发异步动作/指示
-      if (platform === 'onebot' && typeof (adapter as any)?.call === 'function') {
-        const onebot = adapter as any
+      if (platform === 'onebot' && typeof (adapter as OnebotAdapter)?.call === 'function') {
+        const onebot = adapter as OnebotAdapter
         if (groupId) {
           onebot.call('group_poke', { group_id: Number(groupId), user_id: Number(userId) }).catch(() => {})
         } else {
@@ -151,7 +155,14 @@ export function main(ctx: Context, cfg: Config) {
         extraContexts
       )
       const history = memory.getShortTerm(scopeKey)
-      const reply = await geminiClient.chat(systemPrompt, history, targetMessage, abilityManager, abilityCtx)
+      const reply = await geminiClient.chat(
+        systemPrompt,
+        history,
+        targetMessage,
+        abilityManager,
+        abilityCtx,
+        cfg.maxToolLoops
+      )
 
       // 如果 AI 主动选择了沉默工具，则静默结束本次链路
       if (!reply || reply === '__NO_REPLY__') {

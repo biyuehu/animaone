@@ -1,6 +1,9 @@
 import { exec } from 'node:child_process'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { promisify } from 'node:util'
-import { type Context, Symbols } from 'kotori-bot'
+import type { OnebotApi } from '@kotori-bot/kotori-plugin-adapter-onebot'
+import { type Api, type Context, Symbols } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { HierarchicalMemoryService } from '../memory'
 import type { Ability, AbilityContext } from './index'
@@ -33,7 +36,7 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
         }
 
         // 1. 如果指定了 URL，直接抓取页面内容
-        if (args.url) {
+        if (args.url)
           try {
             const resp = await undiciFetch(args.url, {
               headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
@@ -53,10 +56,9 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
           } catch (e) {
             return { error: `网页抓取失败: ${e instanceof Error ? e.message : String(e)}` }
           }
-        }
 
         // 2. 如果指定了 query，使用 DuckDuckGo Lite 进行即时搜索
-        if (args.query) {
+        if (args.query)
           try {
             const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`
             const resp = await undiciFetch(searchUrl, {
@@ -89,7 +91,6 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
           } catch (e) {
             return { error: `搜索执行失败: ${e instanceof Error ? e.message : String(e)}` }
           }
-        }
 
         return { error: '必须提供 url 或 query 参数' }
       }
@@ -246,6 +247,43 @@ export const terminalExecuteAbility: Ability = {
 }
 
 /**
+ * 3.5 专有文件系统读写能力（无命令行转义与编码问题）
+ */
+export const fileReadOrWriteAbility: Ability = {
+  name: 'file_read_or_write',
+  description:
+    '安全读写工作区本地文件。写文件直接写入多行完整内容，无需命令行转义，避免平台编码与换行问题（仅主人可用）',
+  toolDefinition: {
+    ownerOnly: true,
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        action: { type: 'STRING', description: '操作类型: read 或 write' },
+        filePath: { type: 'STRING', description: '相对或绝对文件路径，如 TODO.md, src/app.ts' },
+        content: { type: 'STRING', description: '写入内容（write 必填）' },
+        append: { type: 'BOOLEAN', description: '是否为追加模式（默认 false 为覆盖）' }
+      },
+      required: ['action', 'filePath']
+    },
+    execute: async (args: { action: 'read' | 'write'; filePath: string; content?: string; append?: boolean }) => {
+      try {
+        const targetPath = path.resolve(process.cwd(), args.filePath)
+        if (args.action === 'read') {
+          const data = await fs.readFile(targetPath, 'utf-8')
+          return { success: true, filePath: args.filePath, content: data }
+        }
+        await fs.mkdir(path.dirname(targetPath), { recursive: true })
+        if (args.append) await fs.appendFile(targetPath, args.content ?? '', 'utf-8')
+        else await fs.writeFile(targetPath, args.content ?? '', 'utf-8')
+        return { success: true, message: `已成功保存文件: ${args.filePath}` }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  }
+}
+
+/**
  * 4. 拟人选择性沉默工具：在群聊偶尔插嘴、或对方无理取闹时，AI可主动选择“已读不回”
  */
 export const silenceAbility: Ability = {
@@ -283,33 +321,32 @@ export function createKotoriMessagingAbility(ctx: Context): Ability {
         required: ['message']
       },
       execute: async (args: { targetGroup?: string; targetUser?: string; message: string }) => {
-        const botMap = ctx[Symbols.bot]
-        let onebotApi: any = null
+        const botMap: Map<string, Set<Api>> = ctx[Symbols.bot]
+        let onebotApi: OnebotApi | null = null
 
-        if (botMap) {
+        if (botMap)
           for (const apis of botMap.values()) {
-            for (const api of apis) {
+            for (const api of apis)
               if (api.adapter?.platform === 'onebot') {
-                onebotApi = api
+                onebotApi = api as OnebotApi
                 break
               }
-            }
+
             if (onebotApi) break
           }
-        }
 
         if (!onebotApi) return { error: '未找到在线的 OneBot 适配器实例' }
 
         try {
           if (args.targetGroup) {
-            await onebotApi.call('send_group_msg', {
+            await onebotApi.adapter.call('send_group_msg', {
               group_id: Number(args.targetGroup),
               message: args.message
             })
             return { success: true, message: `已成功投递消息至群 ${args.targetGroup}` }
           }
           if (args.targetUser) {
-            await onebotApi.call('send_msg', {
+            await onebotApi.adapter.call('send_msg', {
               user_id: Number(args.targetUser),
               message: args.message
             })
