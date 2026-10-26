@@ -1,5 +1,6 @@
 import type { Content, GenerateContentResponse, Part } from '@google/genai'
 import { GoogleGenAI } from '@google/genai'
+import type { Context } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { AbilityContext, AbilityManager } from '../ability'
 
@@ -7,14 +8,17 @@ export interface GeminiClientConfig {
   readonly apiKey: string
   readonly modelName: string
   readonly proxy?: string
+  readonly logger?: Context['logger']
 }
 
 export class GeminiClient {
   private readonly ai: GoogleGenAI
   private readonly modelName: string
+  private readonly logger?: Context['logger']
 
   constructor(config: GeminiClientConfig) {
     this.modelName = config.modelName
+    this.logger = config.logger
 
     let fetchFn: typeof fetch | undefined
     if (config.proxy) {
@@ -50,6 +54,11 @@ export class GeminiClient {
       loops++
       let response: GenerateContentResponse | null = null
       let retryCount = 0
+      const loopStartTime = Date.now()
+      this.logger?.debug(
+        `Requesting <cyan>${this.modelName}</cyan> (loop <yellow>${loops}</yellow>, tools: <magenta>${tools.length}</magenta>, prompt: <yellow>${systemPrompt.length}</yellow> chars, input: <yellow>${newMessage.length}</yellow> chars)`
+      )
+
       while (retryCount < 2) {
         try {
           response = await this.ai.models.generateContent({
@@ -58,28 +67,63 @@ export class GeminiClient {
             config: {
               systemInstruction: systemPrompt,
               temperature: 0.7,
+              safetySettings: [
+                { category: 'HARM_CATEGORY_HARASSMENT' as any, threshold: 'BLOCK_NONE' as any },
+                { category: 'HARM_CATEGORY_HATE_SPEECH' as any, threshold: 'BLOCK_NONE' as any },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as any, threshold: 'BLOCK_NONE' as any },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as any, threshold: 'BLOCK_NONE' as any },
+                { category: 'HARM_CATEGORY_CIVIC_INTEGRITY' as any, threshold: 'BLOCK_NONE' as any }
+              ],
               ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
             }
           })
           break
         } catch (fetchErr) {
           retryCount++
+          this.logger?.warn(
+            `API request attempt <yellow>${retryCount}</yellow> failed: <red>${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}</red>`
+          )
           if (retryCount >= 2) throw fetchErr
           await new Promise((r) => setTimeout(r, 1000))
         }
       }
 
-      if (!response) return ''
+      const loopDuration = Date.now() - loopStartTime
+      if (!response) {
+        this.logger?.warn(`Loop <yellow>${loops}</yellow>: Model returned empty response (<yellow>${loopDuration}ms</yellow>)`)
+        return ''
+      }
 
       const functionCalls = response.functionCalls
       if (!functionCalls?.length || !abilityManager || !abilityCtx) {
-        const textParts = response.candidates?.[0]?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
+        const candidate = response.candidates?.[0]
+        const textParts = candidate?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
         const combined = textParts
           .map((p) => p.text)
           .join('')
           .trim()
-        return combined || (response.text?.trim() ?? '')
+        const textResult = combined || (response.text?.trim() ?? '')
+        if (!textResult) {
+          const rawData = {
+            candidates: response.candidates,
+            promptFeedback: (response as { promptFeedback?: unknown }).promptFeedback,
+            usageMetadata: response.usageMetadata
+          }
+          this.logger?.warn(
+            `Loop <yellow>${loops}</yellow>: Model returned 0 text chars (<yellow>${loopDuration}ms</yellow>, data: <red>${JSON.stringify(rawData)}</red>)`
+          )
+        } else {
+          this.logger?.info(
+            `Text generated in loop <yellow>${loops}</yellow> (<yellow>${loopDuration}ms</yellow>), response: <green>${textResult.length}</green> chars`
+          )
+        }
+        return textResult
       }
+
+      const callNames = functionCalls.map((c) => `<cyan>${c.name}</cyan>`).join(', ')
+      this.logger?.info(
+        `Loop <yellow>${loops}</yellow>: Function call triggered [${callNames}] (<yellow>${loopDuration}ms</yellow>)`
+      )
 
       contents.push(
         response.candidates?.[0]?.content ?? {
@@ -93,8 +137,11 @@ export class GeminiClient {
 
       for (const call of functionCalls) {
         const callName = call.name ?? ''
+        const toolStartTime = Date.now()
         try {
           const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
+          const toolDuration = Date.now() - toolStartTime
+          this.logger?.info(`Tool <cyan>${callName}</cyan> completed in <yellow>${toolDuration}ms</yellow>`)
           if (
             callName === 'choose_silence' ||
             (typeof toolResult === 'object' && toolResult !== null && 'silent' in toolResult && toolResult.silent)
@@ -106,17 +153,25 @@ export class GeminiClient {
             functionResponse: { name: callName, response: { result: toolResult } }
           })
         } catch (err) {
+          const toolDuration = Date.now() - toolStartTime
+          this.logger?.error(
+            `Tool <cyan>${callName}</cyan> failed in <yellow>${toolDuration}ms</yellow>: <red>${err instanceof Error ? err.message : String(err)}</red>`
+          )
           functionResponseParts.push({
             functionResponse: { name: callName, response: { error: err instanceof Error ? err.message : String(err) } }
           })
         }
       }
 
-      if (hasSilence) return '__NO_REPLY__'
+      if (hasSilence) {
+        this.logger?.info('<dim>Choose silence activated, suppressing response</dim>')
+        return '__NO_REPLY__'
+      }
 
       contents.push({ role: 'user', parts: functionResponseParts })
     }
 
+    this.logger?.warn(`Exceeded max tool loops (<yellow>${maxLoops}</yellow>)`)
     return ''
   }
 }

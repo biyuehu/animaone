@@ -1,5 +1,5 @@
 import path from 'node:path'
-import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
+// import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
 import { type AdapterConfig, type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
@@ -79,7 +79,12 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
 
-  const geminiClient = new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })
+  const geminiClient = new GeminiClient({
+    apiKey: cfg.apiKey,
+    modelName: cfg.modelName,
+    proxy: cfg.proxy,
+    logger: ctx.logger
+  })
 
   ctx.midware(async (next, session) => {
     if (session.channelId || session.guildId) return next()
@@ -98,11 +103,11 @@ export function main(ctx: Context, cfg: Config) {
 
     const { adapter } = session.api
     const { platform, identity, selfId: botSelfId } = adapter
-    const masterId = (adapter.config as AdapterConfig).master
-    const { userId } = session
-    const isOwner = userId === masterId
+    const masterId = String((adapter.config as AdapterConfig).master ?? '')
+    const userId = String(session.userId)
+    const isOwner = Boolean(masterId) && userId === masterId
     const senderName = session.sender.nickname
-    const groupId = session.groupId ? session.groupId : undefined
+    const groupId = session.groupId ? String(session.groupId) : undefined
 
     const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId, botSelfId, cfg.botName)
     if (!decision.allow) return next()
@@ -115,11 +120,11 @@ export function main(ctx: Context, cfg: Config) {
     }
 
     try {
-      if (platform === 'onebot' && typeof (adapter as OnebotAdapter)?.call === 'function') {
-        const onebot = adapter as OnebotAdapter
-        if (groupId) onebot.call('group_poke', { group_id: Number(groupId), user_id: Number(userId) }).catch(() => {})
-        else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
-      }
+      // if (platform === 'onebot' && typeof (adapter as OnebotAdapter)?.call === 'function') {
+      //   const onebot = adapter as OnebotAdapter
+      //   if (groupId) onebot.call('group_poke', { group_id: Number(groupId), user_id: Number(userId) }).catch(() => {})
+      //   else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
+      // }
 
       const scope = groupId ? groupScope(platform, groupId) : privateScope(platform, userId)
       const scopeKey = formatScopeKey(scope)
@@ -150,6 +155,11 @@ export function main(ctx: Context, cfg: Config) {
         extraContexts
       )
 
+      const startTime = Date.now()
+      ctx.logger.info(
+        `Received message from <cyan>${isOwner ? 'OWNER' : 'USER'}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
+      )
+
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
@@ -161,9 +171,16 @@ export function main(ctx: Context, cfg: Config) {
         cfg.maxToolLoops
       )
 
+      const chatDuration = Date.now() - startTime
+      ctx.logger.info(
+        `Session round finished in <yellow>${chatDuration}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`
+      )
+
       if (!reply || reply === '__NO_REPLY__') return
 
-      memory.recordTurn(scopeKey, profileKey, targetMessage, reply, session.sender?.nickname ?? String(userId))
+      queueMicrotask(() => {
+        memory.recordTurn(scopeKey, profileKey, targetMessage, reply, session.sender?.nickname ?? String(userId))
+      })
 
       const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
       for (let i = 0; i < segments.length; i++) {

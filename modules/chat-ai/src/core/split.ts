@@ -71,20 +71,15 @@ export function splitSentences(text: string, minLength = 12, maxLength = 35): st
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * 拟真活人阅读与打字耗时：
- * 1. 模拟真人先“读完消息 + 思考构思”（1.2s ~ 2.2s）；
- * 2. 模拟真实人类双手打字敲键盘时间（每字 60ms ~ 85ms）；
- * 3. 第二句发出前带有 1.5s ~ 2.5s 的思考与输入停顿。
+ * 拟真活人阅读与打字轻量耗时：
+ * 消除过量的人工沉睡（此前单句额外休眠 2~4 秒），保持轻快自然的即时响应
  */
 export function calculateTypingDelay(sentence: string, isFirstSentence = false): number {
   if (isFirstSentence) {
-    // 读完大哥哥的话并思考准备回答 (1200ms ~ 2000ms) + 敲出前几个字
-    const readAndThink = 1200 + Math.random() * 800
-    const typing = Math.min(1200, sentence.length * (50 + Math.random() * 25))
-    return Math.floor(readAndThink + typing)
+    // 首句：微小起手延迟，快速发出 (150ms ~ 350ms)
+    return Math.floor(150 + Math.random() * 200)
   }
-  // 第二句：发送前停顿 (1000ms ~ 1800ms) + 敲完本句耗时
-  const pause = 1000 + Math.random() * 800
-  const typing = sentence.length * (60 + Math.random() * 25)
-  return Math.min(3500, Math.max(1200, Math.floor(pause + typing)))
+  // 多句续接：短暂停顿，避免刷屏即可 (300ms ~ 600ms)
+  const typing = Math.min(600, sentence.length * 15)
+  return Math.floor(300 + typing)
 }

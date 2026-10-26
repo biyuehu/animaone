@@ -62,7 +62,7 @@ export class MessageGateway {
     }
 
     return rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
-      ? rejectedDecision('rejected')
-      : allowedDecision('group_casual', rawMessage)
+      ? allowedDecision('group_casual', rawMessage)
+      : rejectedDecision('rejected')
   }
 }
