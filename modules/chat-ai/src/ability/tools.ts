@@ -204,7 +204,8 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
 export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryService): Ability {
   return {
     name: 'search_past_memories',
-    description: '深入翻阅数据库中更久远的历史原话与记忆摘要。当需要回忆多轮以前、几天前或特定关键词的旧对话时使用',
+    description:
+      '深入翻阅数据库中更久远的历史原话与概念记忆图谱。支持基于 BM25 算法检索并沿关联网络发散，返回相关记忆与延伸探索线索（cluesToExplore）',
     toolDefinition: {
       ownerOnly: false,
       parameters: {
@@ -212,7 +213,7 @@ export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryServic
         properties: {
           keyword: {
             type: 'STRING',
-            description: '可选的关键词或主题，用于在历史记录中快速检索'
+            description: '检索关键词或探索概念，支持中文语义分词与图遍历联想'
           },
           offset: {
             type: 'INTEGER',
@@ -234,15 +235,33 @@ export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryServic
           limit: args.limit ?? 8
         })
 
-        const nodes = memory.getDatabase().getPyramidMemories(scopeKey, 5)
+        if (args.keyword) {
+          const seedNodes = memory.getDatabase().searchMemoryNodes(scopeKey, args.keyword, 4)
+          const startIds = seedNodes.map((n) => n.id).filter((id): id is number => id !== undefined)
+          const graphResult = memory.getDatabase().traverseGraph(startIds, 2, 6)
+          const combinedNodes = graphResult.nodes.length > 0 ? graphResult.nodes : seedNodes
 
+          return {
+            recalledMessages: messages,
+            relatedMemories: combinedNodes.map((n) => ({
+              time: new Date(n.startTime).toLocaleDateString('zh-CN'),
+              level: n.level,
+              summary: n.summary,
+              tags: n.tags
+            })),
+            cluesToExplore: graphResult.cluesToExplore
+          }
+        }
+
+        const nodes = memory.getDatabase().getPyramidMemories(scopeKey, 5)
         return {
           recalledMessages: messages,
-          relatedSummaries: nodes.map((n) => ({
+          relatedMemories: nodes.map((n) => ({
             time: new Date(n.startTime).toLocaleDateString('zh-CN'),
             level: n.level,
             summary: n.summary
-          }))
+          })),
+          cluesToExplore: []
         }
       }
     }
@@ -264,9 +283,14 @@ export function createPublicMasterRecallAbility(memory: HierarchicalMemoryServic
           limit: { type: 'INTEGER', description: '获取的条数，默认 5' }
         }
       },
-      execute: async (args: { limit?: number }) => ({
-        publicFacts: memory.getDatabase().getProfileFacts('__master__', args.limit ?? 5, 'public')
-      })
+      execute: async (args: { limit?: number }) => {
+        const records = memory.getDatabase().getProfileFactRecords('__master__', args.limit ?? 5, 'public')
+        return {
+          publicFacts: records.map(
+            (r) => `[ID: ${r.id}] [${new Date(r.updatedAt).toLocaleDateString('zh-CN')}] ${r.fact}`
+          )
+        }
+      }
     }
   }
 }
@@ -384,13 +408,13 @@ export function createKotoriMessagingAbility(ctx: Context): Ability {
         if (botMap)
           for (const apis of botMap.values()) {
             for (const api of apis) {
-              if (targetIdentity && api.adapter?.identity === targetIdentity) {
+              if (targetIdentity && api.adapter.identity === targetIdentity) {
                 targetApi = api as OnebotApi
                 break
               }
-              if (!targetApi && api.adapter?.platform === 'onebot') targetApi = api as OnebotApi
+              if (!targetApi && api.adapter.platform === 'onebot') targetApi = api as OnebotApi
             }
-            if (targetApi && (!targetIdentity || targetApi.adapter?.identity === targetIdentity)) break
+            if (targetApi && (!targetIdentity || targetApi.adapter.identity === targetIdentity)) break
           }
 
         if (!targetApi) return { error: `未找到匹配的适配器实例 (${targetIdentity ?? 'onebot'})` }

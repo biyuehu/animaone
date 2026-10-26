@@ -71,11 +71,8 @@ export class HierarchicalMemoryService {
     )
   }
 
-  public assemblePromptContext(scopeKey: string, userId = ''): string[] {
-    const { memoryBlock, profileBlock } = formatAndTruncateMemory(
-      this.db.getPyramidMemories(scopeKey, 8),
-      userId ? this.db.getProfileFacts(userId, 15) : []
-    )
-    return [profileBlock, memoryBlock].filter(Boolean)
+  public assemblePromptContext(_scopeKey: string, userId = ''): string[] {
+    const { profileBlock } = formatAndTruncateMemory([], userId ? this.db.getProfileFactRecords(userId, 20) : [])
+    return [profileBlock].filter(Boolean)
   }
 }

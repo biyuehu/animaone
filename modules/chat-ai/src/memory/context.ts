@@ -1,28 +1,29 @@
-import type { MemoryNode } from './store'
+import type { MemoryNode, ProfileFactRecord } from './store'
 
 export interface BudgetConfig {
-  maxChars?: number // 默认 4000 字符限制
+  maxChars?: number
 }
 
 export function formatAndTruncateMemory(
-  pyramidNodes: MemoryNode[],
-  profileFacts: string[],
+  pyramidNodes: readonly MemoryNode[],
+  profileFacts: readonly ProfileFactRecord[],
   config: BudgetConfig = {}
 ): { memoryBlock: string; profileBlock: string } {
   const maxChars = config.maxChars || 4000
 
-  // 1. 组装用户长期档案（最高优先级，优先保留）
   const profileBlock =
-    profileFacts.length > 0 ? `[USER_LONG_TERM_FACTS]\n${profileFacts.map((f) => `- ${f}`).join('\n')}` : ''
+    profileFacts.length > 0
+      ? `[USER_CORE_FACTS]\n${profileFacts
+          .map((f) => `- [ID: ${f.id}] [${new Date(f.updatedAt).toLocaleDateString('zh-CN')}] ${f.fact}`)
+          .join('\n')}`
+      : ''
 
-  // 2. 组装金字塔多层长期记忆
   const memoryLines = pyramidNodes.map(
     (node) => `- [${new Date(node.startTime).toLocaleDateString('zh-CN')} ${node.level}] ${node.summary}`
   )
 
   let memoryBlock = memoryLines.length > 0 ? `[LONG_TERM_MEMORY_SUMMARIES]\n${memoryLines.join('\n')}` : ''
 
-  // 3. 动态预算裁剪：如果总长度超出预算，按层级从粗到细整段丢弃更久远的节点
   let totalLength = profileBlock.length + memoryBlock.length
   while (memoryLines.length > 2 && totalLength > maxChars) {
     memoryLines.pop()

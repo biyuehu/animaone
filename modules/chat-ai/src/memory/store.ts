@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import { rankDocuments } from '../core/retrieval'
 import type { ChatMessage } from './sliding-window'
 import { modelMessage, userMessage } from './sliding-window'
 
@@ -25,11 +26,27 @@ export interface UserFact {
   readonly updatedAt: number
 }
 
+export interface ProfileFactRecord {
+  readonly id: number
+  readonly fact: string
+  readonly category: string
+  readonly visibility: 'public' | 'private'
+  readonly sourceScope: string
+  readonly sourceContext: string
+  readonly weight: number
+  readonly updatedAt: number
+}
+
 export interface MemoryLink {
   readonly fromId: number
   readonly toId: number
   readonly concept: string
   readonly strength: number
+}
+
+export interface GraphTraversalResult {
+  readonly nodes: MemoryNode[]
+  readonly cluesToExplore: string[]
 }
 
 export class MemoryDatabase {
@@ -250,16 +267,21 @@ export class MemoryDatabase {
       .all(limit) as unknown as MemoryNode[]
   }
 
-  public getProfileFacts(userId: string, limit = 20, visibilityFilter?: 'public' | 'private'): string[] {
+  public getProfileFactRecords(
+    userId: string,
+    limit = 20,
+    visibilityFilter?: 'public' | 'private'
+  ): ProfileFactRecord[] {
     const query = visibilityFilter
-      ? 'SELECT fact FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
-      : 'SELECT fact FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
-    const rows = (
-      visibilityFilter
-        ? this.db.prepare(query).all(userId, visibilityFilter, limit)
-        : this.db.prepare(query).all(userId, limit)
-    ) as { fact: string }[]
-    return rows.map((r) => r.fact)
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY updated_at ASC LIMIT ?'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY updated_at ASC LIMIT ?'
+    return (visibilityFilter
+      ? this.db.prepare(query).all(userId, visibilityFilter, limit)
+      : this.db.prepare(query).all(userId, limit)) as unknown as ProfileFactRecord[]
+  }
+
+  public getProfileFacts(userId: string, limit = 20, visibilityFilter?: 'public' | 'private'): string[] {
+    return this.getProfileFactRecords(userId, limit, visibilityFilter).map((r) => r.fact)
   }
 
   public saveRecentMessage(
@@ -364,7 +386,7 @@ export class MemoryDatabase {
 
   /**
    * 深度回溯历史对话与记忆（翻旧账能力）：
-   * 支持按关键字搜索或时间倒序分页调取更久远之前的原话记录
+   * 支持通过 BM25 + 时间半衰期算法检索历史原话，或按时间倒序分页调取
    */
   public searchDeepHistory(
     scopeKey: string,
@@ -373,29 +395,127 @@ export class MemoryDatabase {
     const limit = options.limit ?? 10
     const offset = options.offset ?? 0
 
-    let rows: { role: string; content: string; created_at: number }[] = []
     if (options.keyword) {
-      rows = this.db
+      const candidateRows = this.db
         .prepare(
-          'SELECT role, content, created_at FROM recent_messages WHERE scope_key = ? AND content LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?'
+          'SELECT id, role, content, created_at FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT 100'
         )
-        .all(scopeKey, `%${options.keyword}%`, limit, offset) as {
-        role: string
-        content: string
-        created_at: number
-      }[]
-    } else {
-      rows = this.db
-        .prepare(
-          'SELECT role, content, created_at FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ? OFFSET ?'
-        )
-        .all(scopeKey, limit, offset) as { role: string; content: string; created_at: number }[]
+        .all(scopeKey) as { id: number; role: string; content: string; created_at: number }[]
+
+      if (candidateRows.length === 0) return []
+      const docs = candidateRows.map((r) => ({ id: r.id, content: r.content, timestamp: r.created_at }))
+      const ranked = rankDocuments(options.keyword, docs)
+      if (ranked.length > 0) {
+        const rowMap = new Map(candidateRows.map((r) => [r.id, r]))
+        return ranked
+          .slice(offset, offset + limit)
+          .map((item) => rowMap.get(item.doc.id))
+          .filter((r): r is { id: number; role: string; content: string; created_at: number } => r !== undefined)
+          .map((r) => ({
+            role: r.role,
+            content: r.content,
+            time: new Date(r.created_at).toLocaleString('zh-CN')
+          }))
+      }
     }
+
+    const rows = this.db
+      .prepare(
+        'SELECT role, content, created_at FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ? OFFSET ?'
+      )
+      .all(scopeKey, limit, offset) as { role: string; content: string; created_at: number }[]
 
     return rows.map((r) => ({
       role: r.role,
       content: r.content,
       time: new Date(r.created_at).toLocaleString('zh-CN')
     }))
+  }
+
+  /**
+   * 基于 BM25 检索语义相关的二级记忆节点
+   */
+  public searchMemoryNodes(scopeKey: string, query: string, limit = 5): MemoryNode[] {
+    const rows = this.db
+      .prepare(
+        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key = ? ORDER BY end_time DESC LIMIT 100'
+      )
+      .all(scopeKey) as unknown as MemoryNode[]
+
+    if (rows.length === 0) return []
+    const docs = rows.map((r) => ({
+      id: r.id ?? 0,
+      content: `${r.summary} ${r.tags ?? ''}`,
+      timestamp: r.endTime
+    }))
+    const ranked = rankDocuments(query, docs)
+    const topRankedMap = new Map(ranked.map((rk) => [rk.doc.id, rk.score]))
+    return rows.filter((r) => r.id && topRankedMap.has(r.id)).slice(0, limit)
+  }
+
+  /**
+   * 图谱 BFS 有界遍历（Graph RAG）：从起点节点向外扩展，获取连通记忆并提取发散线索词
+   */
+  public traverseGraph(startNodeIds: number[], maxDepth = 2, maxNodes = 10): GraphTraversalResult {
+    if (startNodeIds.length === 0) return { nodes: [], cluesToExplore: [] }
+
+    const visitedIds = new Set<number>(startNodeIds)
+    const collectedNodes = new Map<number, MemoryNode>()
+    const clues = new Set<string>()
+
+    for (const id of startNodeIds) {
+      const node = this.db
+        .prepare(
+          'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE id = ?'
+        )
+        .get(id) as unknown as MemoryNode | undefined
+      if (node?.id) {
+        collectedNodes.set(node.id, node)
+        if (node.tags)
+          for (const tag of node.tags.split(/[,，;； ]+/)) {
+            const clean = tag.trim()
+            if (clean) clues.add(clean)
+          }
+      }
+    }
+
+    let currentLayer = [...startNodeIds]
+    for (let depth = 0; depth < maxDepth && currentLayer.length > 0 && collectedNodes.size < maxNodes; depth++) {
+      const placeholders = currentLayer.map(() => '?').join(',')
+      const links = this.db
+        .prepare(
+          `SELECT from_id as fromId, to_id as toId, concept, strength FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`
+        )
+        .all(...currentLayer, ...currentLayer) as unknown as MemoryLink[]
+
+      const nextLayerIds: number[] = []
+      for (const link of links) {
+        if (link.concept) clues.add(link.concept.trim())
+        const neighborId = visitedIds.has(link.fromId) ? link.toId : link.fromId
+        if (!visitedIds.has(neighborId)) {
+          visitedIds.add(neighborId)
+          nextLayerIds.push(neighborId)
+          const neighbor = this.db
+            .prepare(
+              'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE id = ?'
+            )
+            .get(neighborId) as unknown as MemoryNode | undefined
+          if (neighbor?.id) {
+            collectedNodes.set(neighbor.id, neighbor)
+            if (neighbor.tags)
+              for (const tag of neighbor.tags.split(/[,，;； ]+/)) {
+                const clean = tag.trim()
+                if (clean) clues.add(clean)
+              }
+          }
+        }
+      }
+      currentLayer = nextLayerIds
+    }
+
+    return {
+      nodes: Array.from(collectedNodes.values()).slice(0, maxNodes),
+      cluesToExplore: Array.from(clues)
+    }
   }
 }
