@@ -11,8 +11,8 @@ export class MemorySummarizer {
   constructor(
     apiKey: string,
     private readonly db: MemoryDatabase,
-    proxy?: string,
-    modelName = 'gemini-3.5-flash-lite'
+    modelName: string,
+    proxy?: string
   ) {
     this.modelName = modelName
     let fetchFn: typeof fetch | undefined
@@ -56,7 +56,7 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       const summaryMatch = text.match(/\[SUMMARY\]\s*(.*)/)
       const tagsMatch = text.match(/\[TAGS\]\s*(.*)/)
 
-      if (summaryMatch) {
+      if (summaryMatch)
         this.db.addNode({
           level: 'day',
           scopeKey,
@@ -66,7 +66,6 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
           endTime,
           createdAt: Date.now()
         })
-      }
     } catch (err) {
       console.error('[MemorySummarizer] Compaction failed:', err instanceof Error ? err.message : err)
     }
@@ -95,9 +94,7 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
 
       // 将做梦顿悟建立跨记忆关联
-      if (nodes[0].id && nodes[1].id) {
-        this.db.linkNodes(nodes[0].id, nodes[1].id, 'dream_association')
-      }
+      if (nodes[0].id && nodes[1].id) this.db.linkNodes(nodes[0].id, nodes[1].id, 'dream_association')
 
       // 沉淀新灵感事实
       this.db.upsertFact(ownerId, `[做梦灵感] ${text.replace(/\[SPOKEN\].*/, '').trim()}`, 'event')
@@ -108,10 +105,10 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
     }
   }
 
-  public async extractUserProfile(userId: string, recentMessages: string[]): Promise<void> {
-    if (recentMessages.length < 3) return
+  public async extractUserProfile(userId: string, recentMessages: string[], sourceScope = ''): Promise<void> {
+    if (recentMessages.length < 2) return
     const prompt = `请分析以下用户的发言，提取出 1~2 条关于该用户的长期硬性事实（如：使用什么操作系统、偏好什么编程语言、作息习惯等）。
-每行输出一条事实，格式为：[类别] 事实描述（类别可选：identity, preference, event）。如果没有值得记录的长期事实，请直接输出 NONE。
+每行输出一条事实，格式为：[类别][公开性] 事实描述（类别可选：identity, preference, event；公开性可选：public, private。涉及现实隐私或住址选 private，普通技术偏好或人设选 public）。如果没有值得记录的长期事实，请直接输出 NONE。
 
 用户发言：
 ${recentMessages.join('\n')}`
@@ -127,11 +124,14 @@ ${recentMessages.join('\n')}`
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed || trimmed.includes('NONE')) continue
-        const match = trimmed.match(/\[(.*?)\]\s*(.*)/)
-        if (match) {
-          const category: FactCategory = match[1].toLowerCase() as FactCategory
-          this.db.upsertFact(userId, match[2], category)
-        }
+        const match = trimmed.match(/\[(.*?)\](?:\[(.*?)\])?\s*(.*)/)
+        if (!match) continue
+
+        const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) || 'preference'
+        const visibility = match[2]?.toLowerCase() === 'public' ? 'public' : 'private'
+        const fact = (match[3] || '').trim()
+        if (fact)
+          this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) ?? '')
       }
     } catch (err) {
       console.error('[MemorySummarizer] Profile extraction failed:', err instanceof Error ? err.message : err)

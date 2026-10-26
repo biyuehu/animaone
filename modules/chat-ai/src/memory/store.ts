@@ -2,6 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import type { ChatMessage } from './sliding-window'
+import { modelMessage, userMessage } from './sliding-window'
+
 export interface MemoryNode {
   readonly id?: number
   readonly level: 'topic' | 'day' | 'week' | 'month' | 'quarter' | 'year'
@@ -32,11 +35,10 @@ export interface MemoryLink {
 export class MemoryDatabase {
   private readonly db: DatabaseSync
 
-  constructor(dbPath?: string) {
-    const finalPath = dbPath ?? path.join(process.cwd(), 'data', 'memory.db')
-    const dir = path.dirname(finalPath)
+  constructor(dbPath: string) {
+    const dir = path.dirname(dbPath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    this.db = new DatabaseSync(finalPath)
+    this.db = new DatabaseSync(dbPath)
     this.initTables()
   }
 
@@ -71,6 +73,9 @@ export class MemoryDatabase {
         user_id TEXT NOT NULL,
         fact TEXT NOT NULL,
         category TEXT NOT NULL,
+        visibility TEXT DEFAULT 'private',
+        source_scope TEXT DEFAULT '',
+        source_context TEXT DEFAULT '',
         weight INTEGER DEFAULT 1,
         updated_at INTEGER NOT NULL
       );
@@ -105,6 +110,21 @@ export class MemoryDatabase {
     try {
       this.db.exec(`
         ALTER TABLE recent_messages ADD COLUMN sender_name TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE user_profiles ADD COLUMN visibility TEXT DEFAULT 'private';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE user_profiles ADD COLUMN source_scope TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE user_profiles ADD COLUMN source_context TEXT DEFAULT '';
       `)
     } catch {}
   }
@@ -194,17 +214,24 @@ export class MemoryDatabase {
   public upsertFact(
     userId: string,
     fact: string,
-    category: 'preference' | 'identity' | 'event' | 'relation' = 'preference'
+    category: 'preference' | 'identity' | 'event' | 'relation' = 'preference',
+    visibility: 'public' | 'private' = 'private',
+    sourceScope = '',
+    sourceContext = ''
   ): void {
     const exists = this.db.prepare('SELECT id FROM user_profiles WHERE user_id = ? AND fact = ?').get(userId, fact)
     if (exists) {
       this.db
-        .prepare('UPDATE user_profiles SET weight = weight + 1, updated_at = ? WHERE user_id = ? AND fact = ?')
-        .run(Date.now(), userId, fact)
+        .prepare(
+          'UPDATE user_profiles SET weight = weight + 1, visibility = ?, source_scope = ?, source_context = ?, updated_at = ? WHERE user_id = ? AND fact = ?'
+        )
+        .run(visibility, sourceScope, sourceContext, Date.now(), userId, fact)
     } else {
       this.db
-        .prepare('INSERT INTO user_profiles (user_id, fact, category, weight, updated_at) VALUES (?, ?, ?, 1, ?)')
-        .run(userId, fact, category, Date.now())
+        .prepare(
+          'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, source_context, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+        )
+        .run(userId, fact, category, visibility, sourceScope, sourceContext, Date.now())
     }
   }
 
@@ -223,12 +250,16 @@ export class MemoryDatabase {
       .all(limit) as unknown as MemoryNode[]
   }
 
-  public getProfileFacts(userId: string, limit = 20): string[] {
-    return (
-      this.db
-        .prepare('SELECT fact FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?')
-        .all(userId, limit) as { fact: string }[]
-    ).map((r) => r.fact)
+  public getProfileFacts(userId: string, limit = 20, visibilityFilter?: 'public' | 'private'): string[] {
+    const query = visibilityFilter
+      ? 'SELECT fact FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+      : 'SELECT fact FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+    const rows = (
+      visibilityFilter
+        ? this.db.prepare(query).all(userId, visibilityFilter, limit)
+        : this.db.prepare(query).all(userId, limit)
+    ) as { fact: string }[]
+    return rows.map((r) => r.fact)
   }
 
   public saveRecentMessage(
@@ -255,10 +286,7 @@ export class MemoryDatabase {
       .run(scopeKey, scopeKey)
   }
 
-  public loadRecentMessages(
-    scopeKey: string,
-    limit = 20
-  ): { role: 'user' | 'model'; content: string; timestamp: number; userId?: string; senderName?: string }[] {
+  public loadRecentMessages(scopeKey: string, limit = 20): ChatMessage[] {
     const rows = this.db
       .prepare(
         'SELECT role, content, user_id as userId, sender_name as senderName, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
@@ -270,7 +298,13 @@ export class MemoryDatabase {
       userId: string
       senderName: string
     }[]
-    return rows.reverse()
+    return rows
+      .reverse()
+      .map((r) =>
+        r.role === 'model'
+          ? modelMessage(r.content, r.timestamp)
+          : userMessage(r.content, r.userId, r.senderName, r.timestamp)
+      )
   }
 
   /**
@@ -279,17 +313,33 @@ export class MemoryDatabase {
   public getGlobalRecentMessages(
     limit = 8,
     platformFilter?: string
-  ): { scope: string; role: string; content: string; time: string }[] {
+  ): {
+    scope: string
+    role: string
+    userId: string
+    senderName: string
+    content: string
+    time: string
+  }[] {
     const query = platformFilter
-      ? 'SELECT scope_key, role, content, created_at FROM recent_messages WHERE scope_key LIKE ? ORDER BY id DESC LIMIT ?'
-      : 'SELECT scope_key, role, content, created_at FROM recent_messages ORDER BY id DESC LIMIT ?'
+      ? 'SELECT scope_key, role, user_id, sender_name, content, created_at FROM recent_messages WHERE scope_key LIKE ? ORDER BY id DESC LIMIT ?'
+      : 'SELECT scope_key, role, user_id, sender_name, content, created_at FROM recent_messages ORDER BY id DESC LIMIT ?'
     const rows = (
       platformFilter ? this.db.prepare(query).all(`${platformFilter}:%`, limit) : this.db.prepare(query).all(limit)
-    ) as { scope_key: string; role: string; content: string; created_at: number }[]
+    ) as {
+      scope_key: string
+      role: string
+      user_id: string
+      sender_name: string
+      content: string
+      created_at: number
+    }[]
 
     return rows.map((r) => ({
       scope: r.scope_key,
       role: r.role,
+      userId: r.user_id,
+      senderName: r.sender_name,
       content: r.content,
       time: new Date(r.created_at).toLocaleString('zh-CN')
     }))
