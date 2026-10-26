@@ -17,12 +17,12 @@ export class HierarchicalMemoryService {
     }
   }
 
-  public recordTurn(scopeKey: string, userId: string, userMsg: string, modelMsg: string): void {
-    this.slidingWindow.addMessage(scopeKey, 'user', userMsg)
+  public recordTurn(scopeKey: string, userId: string, userMsg: string, modelMsg: string, senderName = ''): void {
+    this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
 
     // 同步持久化写入 SQLite，确保关机重启原话不丢失
-    this.db.saveRecentMessage(scopeKey, 'user', userMsg)
+    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName)
     this.db.saveRecentMessage(scopeKey, 'model', modelMsg)
 
     const count = (this.uncommittedCount.get(scopeKey) ?? 0) + 1
@@ -53,17 +53,27 @@ export class HierarchicalMemoryService {
     return this.db.getOrCreateBirthTime()
   }
 
-  public getShortTerm(scopeKey: string): { role: 'user' | 'model'; content: string }[] {
+  public getShortTerm(scopeKey: string, masterId?: string): { role: 'user' | 'model'; content: string }[] {
     // 首次读取该会话时，若内存滑窗为空，自动从 SQLite 恢复持久化的历史记录
     if (!this.slidingWindow.has(scopeKey)) {
       const persisted = this.db.loadRecentMessages(scopeKey, 20)
       this.slidingWindow.loadInitialMessages(scopeKey, persisted)
     }
 
-    return this.slidingWindow.getContext(scopeKey).map((m) => ({
-      role: m.role,
-      content: m.content
-    }))
+    const isGroup = scopeKey.includes(':group:')
+    return this.slidingWindow.getContext(scopeKey).map((m) => {
+      if (m.role === 'model') return { role: 'model', content: m.content }
+      if (!isGroup) return { role: 'user', content: m.content }
+
+      const isSpeakerMaster = masterId && m.userId && String(m.userId) === String(masterId)
+      const prefix = isSpeakerMaster
+        ? `[主人${m.senderName ? `(${m.senderName})` : ''}]`
+        : `[群友${m.senderName ? `(${m.senderName})` : ''}(ID:${m.userId || '未知'})]`
+      return {
+        role: 'user',
+        content: `${prefix}: ${m.content}`
+      }
+    })
   }
 
   public assemblePromptContext(scopeKey: string, userId: string): string[] {

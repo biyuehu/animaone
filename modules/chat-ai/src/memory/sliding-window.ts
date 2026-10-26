@@ -2,6 +2,8 @@ export interface ChatMessage {
   role: 'user' | 'model'
   content: string
   timestamp: number
+  userId?: string
+  senderName?: string
 }
 
 export class SlidingWindowMemory {
@@ -9,7 +11,7 @@ export class SlidingWindowMemory {
 
   constructor(private readonly maxTurns: number = 20) {}
 
-  addMessage(scopeKey: string, role: 'user' | 'model', content: string): void {
+  addMessage(scopeKey: string, role: 'user' | 'model', content: string, userId = '', senderName = ''): void {
     const cleaned = content.trim()
     if (!cleaned) return
 
@@ -22,7 +24,9 @@ export class SlidingWindowMemory {
     list.push({
       role,
       content: cleaned,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      userId,
+      senderName
     })
 
     // 维持固定窗口大小

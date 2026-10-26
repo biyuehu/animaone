@@ -81,6 +81,8 @@ export class MemoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scope_key TEXT NOT NULL,
         role TEXT NOT NULL,
+        user_id TEXT DEFAULT '',
+        sender_name TEXT DEFAULT '',
         content TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -93,6 +95,18 @@ export class MemoryDatabase {
         created_at INTEGER NOT NULL
       );
     `)
+
+    // 自动数据库无损平滑迁移：兼容旧数据库增加 user_id / sender_name 字段
+    try {
+      this.db.exec(`
+        ALTER TABLE recent_messages ADD COLUMN user_id TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE recent_messages ADD COLUMN sender_name TEXT DEFAULT '';
+      `)
+    } catch {}
   }
 
   public addNode(node: MemoryNode): number {
@@ -217,15 +231,23 @@ export class MemoryDatabase {
     ).map((r) => r.fact)
   }
 
-  public saveRecentMessage(scopeKey: string, role: 'user' | 'model', content: string): void {
+  public saveRecentMessage(
+    scopeKey: string,
+    role: 'user' | 'model',
+    content: string,
+    userId = '',
+    senderName = ''
+  ): void {
     this.db
-      .prepare('INSERT INTO recent_messages (scope_key, role, content, created_at) VALUES (?, ?, ?, ?)')
-      .run(scopeKey, role, content, Date.now())
+      .prepare(
+        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(scopeKey, role, userId, senderName, content, Date.now())
 
     // 保持每个 scope 最多保留 30 条最近消息
     this.db
       .prepare(`
-        DELETE FROM recent_messages 
+        DELETE FROM recent_messages
         WHERE scope_key = ? AND id NOT IN (
           SELECT id FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT 30
         )
@@ -236,13 +258,41 @@ export class MemoryDatabase {
   public loadRecentMessages(
     scopeKey: string,
     limit = 20
-  ): { role: 'user' | 'model'; content: string; timestamp: number }[] {
+  ): { role: 'user' | 'model'; content: string; timestamp: number; userId?: string; senderName?: string }[] {
     const rows = this.db
       .prepare(
-        'SELECT role, content, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
+        'SELECT role, content, user_id as userId, sender_name as senderName, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
       )
-      .all(scopeKey, limit) as { role: 'user' | 'model'; content: string; timestamp: number }[]
+      .all(scopeKey, limit) as {
+      role: 'user' | 'model'
+      content: string
+      timestamp: number
+      userId: string
+      senderName: string
+    }[]
     return rows.reverse()
+  }
+
+  /**
+   * 调取跨会话/跨平台的全局最新近期原话（不依赖满10轮压缩）
+   */
+  public getGlobalRecentMessages(
+    limit = 8,
+    platformFilter?: string
+  ): { scope: string; role: string; content: string; time: string }[] {
+    const query = platformFilter
+      ? 'SELECT scope_key, role, content, created_at FROM recent_messages WHERE scope_key LIKE ? ORDER BY id DESC LIMIT ?'
+      : 'SELECT scope_key, role, content, created_at FROM recent_messages ORDER BY id DESC LIMIT ?'
+    const rows = (
+      platformFilter ? this.db.prepare(query).all(`${platformFilter}:%`, limit) : this.db.prepare(query).all(limit)
+    ) as { scope_key: string; role: string; content: string; created_at: number }[]
+
+    return rows.map((r) => ({
+      scope: r.scope_key,
+      role: r.role,
+      content: r.content,
+      time: new Date(r.created_at).toLocaleString('zh-CN')
+    }))
   }
 
   /**
