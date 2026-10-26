@@ -4,7 +4,6 @@ export interface AbilityContext {
   readonly platform: string
   readonly identity: string
   readonly isOwner: boolean
-  readonly message: string
 }
 
 export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = unknown> {
@@ -13,8 +12,8 @@ export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = 
   readonly execute: (args: Args, ctx: AbilityContext) => Promise<Result>
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Required for heterogeneous ability storage
-export interface Ability<Args = any, Result = any> {
+// biome-ignore lint/suspicious/noExplicitAny: Required for heterogeneous ability storage with different typed Args
+export interface Ability<Args = any, Result = unknown> {
   readonly name: string
   readonly description: string
   readonly provideContext?: (ctx: AbilityContext) => Promise<string | null>

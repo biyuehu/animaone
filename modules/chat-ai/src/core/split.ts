@@ -1,47 +1,71 @@
 /**
- * 拟真分句：
- * - 绝大多数普通闲聊直接整段发一条，绝不切碎成多句轰炸刷屏；
- * - 仅在字数确实较长（>70 字）且有非常明确的换行段落时，最多拆分成 2 句；
- * - 会自动清洗掉多余的连续空行与首尾空白，避免单条消息内部出现怪异的大空行。
+ * 多话自然分割（对齐 reference/src/utils.ts 实现）：
+ * - 如果包含大段代码块或多行代码结构，保持整体发送，绝不切断代码；
+ * - 普通聊天按标点符号（。！？!?…）分段并智能合并短句，确保自然呼吸感与分句体验。
  */
-export function splitSentences(text: string): string[] {
-  // 先把文本里可能存在的 3 个及以上连续换行压缩为双换行，去掉多余空洞
-  const cleaned = text.replace(/\n{3,}/g, '\n\n').trim()
+export function splitSentences(text: string, minLength = 12, maxLength = 35): string[] {
+  // 保持代码块或长文本结构完整，绝不把代码切碎
+  if (
+    text.includes('```') ||
+    text.includes('import ') ||
+    text.includes('function ') ||
+    text.includes('export ') ||
+    text.includes('{\n') ||
+    text.includes('[\n')
+  )
+    return [text.trim()]
+
+  const cleaned = text
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
   if (!cleaned) return []
 
-  // 保持代码块完整
-  if (cleaned.includes('```')) return [cleaned]
+  // 标点符号正则表达式
+  const PUNCTUATION_REGEX = /([。！？!?…\n]+)/g
+  const rawSegments = cleaned.split(PUNCTUATION_REGEX)
+  const initialSentences: string[] = []
 
-  // 如果原本就不长（70 字以内），直接发 1 条，最具人类自然感（即使内部有换行，也只压成一条发）
-  if (cleaned.length <= 70) {
-    // 把内部空行压紧为单换行，真人打字在同条消息里不会留大片空行
-    return [cleaned.replace(/\n\s*\n/g, '\n')]
+  // 合并标点符号到前一个句子
+  for (let i = 0; i < rawSegments.length; i += 2) {
+    const sentence = rawSegments[i]?.trim() ?? ''
+    const punctuation = rawSegments[i + 1]?.trim() ?? ''
+    if (sentence) initialSentences.push(sentence + punctuation)
   }
 
-  // 超过 70 字且包含换行段落时，按段落拆分（最多拆 2 条消息）
-  if (cleaned.includes('\n')) {
-    const parts = cleaned
-      .split(/\n+/)
-      .map((p) => p.trim())
-      .filter(Boolean)
-    if (parts.length === 1) return parts
-    // 第 1 句发第一段，剩下的合并为第 2 句（内部多余空行合为单换行）
-    return [parts[0], parts.slice(1).join('\n')]
-  }
+  if (initialSentences.length === 0) return [cleaned]
 
-  // 如果是一大坨长文本（超过 80 字）且没有换行，在句号/感叹号处寻找一次天然切分点（最多拆成 2 句）
-  if (cleaned.length > 80) {
-    const splitIndex = cleaned.search(/[。！？!?](\s*)/)
-    if (splitIndex > 15 && splitIndex < cleaned.length - 15) {
-      const first = cleaned.slice(0, splitIndex + 1).trim()
-      const second = cleaned.slice(splitIndex + 1).trim()
-      if (first && second) {
-        return [first, second]
+  const finalSentences: string[] = []
+  let currentSentence = ''
+
+  for (const sentence of initialSentences) {
+    const potentialLength = currentSentence.length + sentence.length
+    if (sentence.length > maxLength) {
+      if (currentSentence) finalSentences.push(currentSentence)
+      finalSentences.push(sentence)
+      currentSentence = ''
+      continue
+    }
+
+    if (potentialLength <= maxLength) {
+      currentSentence += sentence
+      if (currentSentence.length >= minLength && potentialLength >= maxLength * 0.8) {
+        finalSentences.push(currentSentence)
+        currentSentence = ''
       }
+    } else {
+      if (currentSentence) finalSentences.push(currentSentence)
+      currentSentence = sentence
     }
   }
 
-  return [cleaned]
+  if (currentSentence) finalSentences.push(currentSentence)
+
+  return finalSentences.reduce((result, sentence) => {
+    if (sentence.length < minLength && result.length > 0) result[result.length - 1] += sentence
+    else result.push(sentence)
+    return result
+  }, [] as string[])
 }
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))

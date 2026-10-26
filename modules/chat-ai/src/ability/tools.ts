@@ -29,18 +29,15 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
         }
       },
       execute: async (args: { url?: string; query?: string }) => {
-        let agent: ProxyAgent | undefined
-        if (proxy) {
-          const proxyUrl = proxy.startsWith('http') ? proxy : `http://${proxy}`
-          agent = new ProxyAgent(proxyUrl)
-        }
+        const agent = proxy ? new ProxyAgent(proxy.startsWith('http') ? proxy : `http://${proxy}`) : undefined
 
         // 1. 如果指定了 URL，直接抓取页面内容
         if (args.url)
           try {
             const resp = await undiciFetch(args.url, {
               headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
-              dispatcher: agent
+              dispatcher: agent,
+              signal: AbortSignal.timeout(8000)
             })
             const html = await resp.text()
             // 简单剔除 script、style 与 html 标签，提取干净的正文前 2000 字
@@ -65,7 +62,8 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
               },
-              dispatcher: agent
+              dispatcher: agent,
+              signal: AbortSignal.timeout(8000)
             })
             const html = await resp.text()
             // 正则匹配提取搜索结果标题与摘要 snippet
@@ -78,14 +76,16 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
               match = snippetRegex.exec(html)
             }
 
-            if (snippets.length === 0) {
-              // 备选纯文本兜底提取
-              const fallback = html
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/\s+/g, ' ')
-                .slice(0, 1000)
-              return { query: args.query, results: [fallback] }
-            }
+            if (snippets.length === 0)
+              return {
+                query: args.query,
+                results: [
+                  html
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .slice(0, 1000)
+                ]
+              }
 
             return { query: args.query, results: snippets }
           } catch (e) {
@@ -130,12 +130,12 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
 }
 
 /**
- * 2. 跨平台/分身灵魂穿梭：调取主人在其他平台或会话中的近期记忆与对话
+ * 2. 跨平台/分身灵魂穿梭：调取在其他平台终端或最近会话中的聊天记录与记忆要点
  */
 export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryService): Ability {
   return {
     name: 'recall_cross_platform_chat',
-    description: '主动穿梭查阅主人在其他平台终端（如 onebot、cmd）或最近会话中的聊天记录与记忆要点',
+    description: '主动穿梭查阅在其他平台终端（如 onebot、cmd）或最近会话中的聊天记录与记忆要点',
     toolDefinition: {
       ownerOnly: true,
       parameters: {
@@ -145,23 +145,40 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
             type: 'STRING',
             description: '可选的目标平台名称，如 onebot、cmd。不传则返回所有已知平台的最近对话'
           },
-          limit: { type: 'INTEGER', description: '获取的条数，默认 5' }
+          limit: { type: 'INTEGER', description: '获取的条数，默认 6' }
         }
       },
       execute: async (args: { targetPlatform?: string; limit?: number }) => {
-        const limit = args.limit ?? 5
-        // 从 memory_nodes 与 user_profiles 查阅跨域内容
-        const nodes = memory.getDatabase().getAllRecentNodes(limit, args.targetPlatform)
+        const limit = args.limit ?? 6
+        // 1. 优先查阅跨平台最新发生的原话记录（无需等待10轮压缩）
+        const recentChats = memory.getDatabase().getGlobalRecentMessages(limit, args.targetPlatform)
+        // 2. 查阅长期沉淀的记忆节点与主人核心事实
+        const nodes = memory.getDatabase().getAllRecentNodes(4, args.targetPlatform)
         const facts = memory.getDatabase().getProfileFacts('__master__', 10)
         return {
+          latestRealtimeChats: recentChats.map((c) => {
+            const isGroup = c.scope.includes(':group:')
+            const scopeParts = c.scope.split(':')
+            const chatType = isGroup ? `群聊(群号:${scopeParts[2] ?? ''})` : '私聊'
+            return {
+              platform: scopeParts[0],
+              chatType,
+              sender: c.role === 'user' ? '用户' : 'AI自己',
+              message: c.content,
+              time: c.time
+            }
+          }),
           masterProfileFacts: facts,
-          recentCrossPlatformNodes: nodes.map((n) => ({
-            platform: n.scopeKey.split(':')[0],
-            scope: n.scopeKey,
-            summary: n.summary,
-            tags: n.tags,
-            time: new Date(n.endTime).toLocaleString('zh-CN')
-          }))
+          longTermMemorySummaries: nodes.map((n) => {
+            const isGroup = n.scopeKey.includes(':group:')
+            const scopeParts = n.scopeKey.split(':')
+            return {
+              platform: scopeParts[0],
+              chatType: isGroup ? `群聊(群号:${scopeParts[2] ?? ''})` : '私聊',
+              summary: n.summary,
+              time: new Date(n.endTime).toLocaleString('zh-CN')
+            }
+          })
         }
       }
     }
@@ -268,10 +285,8 @@ export const fileReadOrWriteAbility: Ability = {
     execute: async (args: { action: 'read' | 'write'; filePath: string; content?: string; append?: boolean }) => {
       try {
         const targetPath = path.resolve(process.cwd(), args.filePath)
-        if (args.action === 'read') {
-          const data = await fs.readFile(targetPath, 'utf-8')
-          return { success: true, filePath: args.filePath, content: data }
-        }
+        if (args.action === 'read')
+          return { success: true, filePath: args.filePath, content: await fs.readFile(targetPath, 'utf-8') }
         await fs.mkdir(path.dirname(targetPath), { recursive: true })
         if (args.append) await fs.appendFile(targetPath, args.content ?? '', 'utf-8')
         else await fs.writeFile(targetPath, args.content ?? '', 'utf-8')
@@ -303,54 +318,69 @@ export const silenceAbility: Ability = {
 }
 
 /**
- * 5. Kotori 框架内部联动能力：主动向指定群或好友投递消息
+ * 5. Kotori 框架内部联动能力：主动向指定实例与目标群或好友投递消息
  */
 export function createKotoriMessagingAbility(ctx: Context): Ability {
   return {
     name: 'kotori_send_message',
-    description: '通过 Kotori 底层适配器主动向指定的群组或指定私聊投递一条消息',
+    description: '通过 Kotori 底层适配器主动向指定的实例投递群消息或私聊消息',
     toolDefinition: {
       ownerOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
+          identity: {
+            type: 'STRING',
+            description: '目标适配器实例名称（如 lambda、cmd-test），不传则自动匹配当前在线的 OneBot 实例'
+          },
           targetGroup: { type: 'STRING', description: '目标群号（如果是发到群里）' },
           targetUser: { type: 'STRING', description: '目标用户ID（如果是私聊）' },
           message: { type: 'STRING', description: '要投递的消息文本' }
         },
         required: ['message']
       },
-      execute: async (args: { targetGroup?: string; targetUser?: string; message: string }) => {
+      execute: async (
+        args: { identity?: string; targetGroup?: string; targetUser?: string; message: string },
+        abilityCtx?: AbilityContext
+      ) => {
         const botMap: Map<string, Set<Api>> = ctx[Symbols.bot]
-        let onebotApi: OnebotApi | null = null
+        let targetApi: OnebotApi | null = null
+        const targetIdentity = args.identity ?? abilityCtx?.identity
 
         if (botMap)
           for (const apis of botMap.values()) {
-            for (const api of apis)
-              if (api.adapter?.platform === 'onebot') {
-                onebotApi = api as OnebotApi
+            for (const api of apis) {
+              if (targetIdentity && api.adapter?.identity === targetIdentity) {
+                targetApi = api as OnebotApi
                 break
               }
-
-            if (onebotApi) break
+              if (!targetApi && api.adapter?.platform === 'onebot') targetApi = api as OnebotApi
+            }
+            if (targetApi && (!targetIdentity || targetApi.adapter?.identity === targetIdentity)) break
           }
 
-        if (!onebotApi) return { error: '未找到在线的 OneBot 适配器实例' }
+        if (!targetApi) return { error: `未找到匹配的适配器实例 (${targetIdentity ?? 'onebot'})` }
 
         try {
           if (args.targetGroup) {
-            await onebotApi.adapter.call('send_group_msg', {
+            await targetApi.adapter.call('send_group_msg', {
               group_id: Number(args.targetGroup),
               message: args.message
             })
-            return { success: true, message: `已成功投递消息至群 ${args.targetGroup}` }
+            return {
+              success: true,
+              message: `已通过实例 ${targetApi.adapter.identity} 成功投递消息至群 ${args.targetGroup}`
+            }
           }
           if (args.targetUser) {
-            await onebotApi.adapter.call('send_msg', {
+            await targetApi.adapter.call('send_msg', {
               user_id: Number(args.targetUser),
               message: args.message
             })
-            return { success: true, message: `已成功投递私聊消息至用户 ${args.targetUser}` }
+            return {
+              success: true,
+              message: `已通过实例 ${targetApi.adapter.identity} 成功投递私聊消息至用户 ${args.targetUser}`
+            }
           }
           return { error: '必须指定 targetGroup 或 targetUser' }
         } catch (e) {

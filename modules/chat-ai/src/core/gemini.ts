@@ -1,4 +1,4 @@
-import type { Content, Part } from '@google/genai'
+import type { Content, GenerateContentResponse, Part } from '@google/genai'
 import { GoogleGenAI } from '@google/genai'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { AbilityContext, AbilityManager } from '../ability'
@@ -48,25 +48,38 @@ export class GeminiClient {
     let loops = 0
     while (loops < maxLoops) {
       loops++
-      const response = await this.ai.models.generateContent({
-        model: this.modelName,
-        contents,
-        config: {
-          systemInstruction: systemPrompt,
-          temperature: 0.7,
-          ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
+      let response: GenerateContentResponse | null = null
+      let retryCount = 0
+      while (retryCount < 2) {
+        try {
+          response = await this.ai.models.generateContent({
+            model: this.modelName,
+            contents,
+            config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.7,
+              ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
+            }
+          })
+          break
+        } catch (fetchErr) {
+          retryCount++
+          if (retryCount >= 2) throw fetchErr
+          await new Promise((r) => setTimeout(r, 1000))
         }
-      })
+      }
+
+      if (!response) return ''
 
       const functionCalls = response.functionCalls
       if (!functionCalls?.length || !abilityManager || !abilityCtx) {
         const textParts = response.candidates?.[0]?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
-        return textParts.length > 0
-          ? textParts
-              .map((p) => p.text)
-              .join('')
-              .trim()
-          : (response.text?.trim() ?? '……')
+        const combined = textParts
+          .map((p) => p.text)
+          .join('')
+          .trim()
+        if (combined) return combined
+        return response.text?.trim() ?? ''
       }
 
       contents.push(
@@ -105,6 +118,6 @@ export class GeminiClient {
       contents.push({ role: 'user', parts: functionResponseParts })
     }
 
-    return '好啦，已经替你确认并整理好了。'
+    return ''
   }
 }
