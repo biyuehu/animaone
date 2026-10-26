@@ -5,7 +5,7 @@ import type { AbilityContext, AbilityManager } from '../ability'
 
 export interface GeminiClientConfig {
   readonly apiKey: string
-  readonly modelName?: string
+  readonly modelName: string
   readonly proxy?: string
 }
 
@@ -14,7 +14,7 @@ export class GeminiClient {
   private readonly modelName: string
 
   constructor(config: GeminiClientConfig) {
-    this.modelName = config.modelName ?? 'gemini-3.5-flash-lite'
+    this.modelName = config.modelName
 
     let fetchFn: typeof fetch | undefined
     if (config.proxy) {
@@ -78,8 +78,7 @@ export class GeminiClient {
           .map((p) => p.text)
           .join('')
           .trim()
-        if (combined) return combined
-        return response.text?.trim() ?? ''
+        return combined || (response.text?.trim() ?? '')
       }
 
       contents.push(

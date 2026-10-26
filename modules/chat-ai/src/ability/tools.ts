@@ -6,6 +6,7 @@ import type { OnebotApi } from '@kotori-bot/kotori-plugin-adapter-onebot'
 import { type Api, type Context, Symbols } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { HierarchicalMemoryService } from '../memory'
+import { parseScopeKey } from '../memory/scope'
 import type { Ability, AbilityContext } from './index'
 
 const execAsync = promisify(exec)
@@ -99,7 +100,7 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
 }
 
 /**
- * 1. 即刻记忆工具：主动沉淀事实到 SQLite user_profiles
+ * 即刻记忆工具：主动沉淀事实到 SQLite user_profiles
  */
 export function createRememberAbility(memory: HierarchicalMemoryService): Ability {
   return {
@@ -116,21 +117,32 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
             type: 'STRING',
             enum: ['preference', 'identity', 'event', 'relation'],
             description: '事实类别：preference(喜好), identity(身份), event(事件), relation(关系)'
+          },
+          visibility: {
+            type: 'STRING',
+            enum: ['public', 'private'],
+            description: '公开属性：public(允许向群友透露的公开特征/爱好/技术栈), private(现实隐私/住址等绝密档案)'
           }
         },
         required: ['fact']
       },
-      execute: async (args: { fact: string; category?: string }) => {
+      execute: async (args: { fact: string; category?: string; visibility?: string }, ctx?: AbilityContext) => {
         const cat = (args.category ?? 'preference') as 'preference' | 'identity' | 'event' | 'relation'
-        memory.getDatabase().upsertFact('__master__', args.fact, cat)
-        return { success: true, message: `已成功把事实写入大哥哥的长期档案：${args.fact}` }
+        const vis = args.visibility === 'public' ? 'public' : 'private'
+        const sourceScope = ctx
+          ? ctx.groupId
+            ? `${ctx.platform}:group:${ctx.groupId}`
+            : `${ctx.platform}:private:${ctx.userId}`
+          : ''
+        memory.getDatabase().upsertFact('__master__', args.fact, cat, vis, sourceScope)
+        return { success: true, message: `已成功把事实写入大哥哥的长期档案：${args.fact} (${vis})` }
       }
     }
   }
 }
 
 /**
- * 2. 跨平台/分身灵魂穿梭：调取在其他平台终端或最近会话中的聊天记录与记忆要点
+ * 跨平台/分身灵魂穿梭：调取在其他平台终端或最近会话中的聊天记录与记忆要点
  */
 export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryService): Ability {
   return {
@@ -157,25 +169,25 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
         const facts = memory.getDatabase().getProfileFacts('__master__', 10)
         return {
           latestRealtimeChats: recentChats.map((c) => {
-            const isGroup = c.scope.includes(':group:')
-            const scopeParts = c.scope.split(':')
-            const chatType = isGroup ? `群聊(群号:${scopeParts[2] ?? ''})` : '私聊'
+            const scope = parseScopeKey(c.scope)
+            const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
+            const platformTag = scope.platform.toUpperCase()
+            const isOwner = c.userId === '__master__' || c.role === 'model'
+            const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
+            const ownerTag = c.role !== 'model' && isOwner ? '[OWNER]' : ''
+            const line = `[${platformTag}][${chatType}]${senderTag}${ownerTag} ${c.content}`
             return {
-              platform: scopeParts[0],
-              chatType,
-              sender: c.role === 'user' ? '用户' : 'AI自己',
-              message: c.content,
+              formatted: line,
               time: c.time
             }
           }),
           masterProfileFacts: facts,
           longTermMemorySummaries: nodes.map((n) => {
-            const isGroup = n.scopeKey.includes(':group:')
-            const scopeParts = n.scopeKey.split(':')
+            const scope = parseScopeKey(n.scopeKey)
+            const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
+            const platformTag = scope.platform.toUpperCase()
             return {
-              platform: scopeParts[0],
-              chatType: isGroup ? `群聊(群号:${scopeParts[2] ?? ''})` : '私聊',
-              summary: n.summary,
+              formatted: `[${platformTag}][${chatType}] ${n.summary}`,
               time: new Date(n.endTime).toLocaleString('zh-CN')
             }
           })
@@ -186,7 +198,7 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
 }
 
 /**
- * 2.5 深度回溯历史记忆与对话（翻旧账能力）：
+ * 深度回溯历史记忆与对话（翻旧账能力）：
  * 当对方反复追问“之前我们聊了什么”、“更早之前说了啥”、或询问某个特定旧话题时使用
  */
 export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryService): Ability {
@@ -238,7 +250,29 @@ export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryServic
 }
 
 /**
- * 3. 宿主机终端 Shell 执行能力
+ * 获取主人公开认知（群友可用，只返回允许公开吹嘘的非隐私特征）
+ */
+export function createPublicMasterRecallAbility(memory: HierarchicalMemoryService): Ability {
+  return {
+    name: 'recall_master_public_profile',
+    description: '当群友主动打听或问及大哥哥（主人）的特征、喜好或公开身份时调用，仅返回允许对外公开的非私密信息',
+    toolDefinition: {
+      ownerOnly: false,
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          limit: { type: 'INTEGER', description: '获取的条数，默认 5' }
+        }
+      },
+      execute: async (args: { limit?: number }) => ({
+        publicFacts: memory.getDatabase().getProfileFacts('__master__', args.limit ?? 5, 'public')
+      })
+    }
+  }
+}
+
+/**
+ * 宿主机终端 Shell 执行能力
  */
 export const terminalExecuteAbility: Ability = {
   name: 'execute_terminal_command',
@@ -264,7 +298,7 @@ export const terminalExecuteAbility: Ability = {
 }
 
 /**
- * 3.5 专有文件系统读写能力（无命令行转义与编码问题）
+ * 专有文件系统读写能力（无命令行转义与编码问题）
  */
 export const fileReadOrWriteAbility: Ability = {
   name: 'file_read_or_write',
@@ -299,7 +333,7 @@ export const fileReadOrWriteAbility: Ability = {
 }
 
 /**
- * 4. 拟人选择性沉默工具：在群聊偶尔插嘴、或对方无理取闹时，AI可主动选择“已读不回”
+ * 拟人选择性沉默工具：在群聊偶尔插嘴、或对方无理取闹时，AI可主动选择“已读不回”
  */
 export const silenceAbility: Ability = {
   name: 'choose_silence',
@@ -318,7 +352,7 @@ export const silenceAbility: Ability = {
 }
 
 /**
- * 5. Kotori 框架内部联动能力：主动向指定实例与目标群或好友投递消息
+ * Kotori 框架内部联动能力：主动向指定实例与目标群或好友投递消息
  */
 export function createKotoriMessagingAbility(ctx: Context): Ability {
   return {

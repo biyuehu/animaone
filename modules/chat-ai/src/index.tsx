@@ -1,3 +1,4 @@
+import path from 'node:path'
 import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
 import { type AdapterConfig, type Context, Symbols, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
@@ -5,6 +6,7 @@ import { systemStatusAbility } from './ability/system'
 import {
   createCrossPlatformRecallAbility,
   createKotoriMessagingAbility,
+  createPublicMasterRecallAbility,
   createRememberAbility,
   createSearchPastMemoriesAbility,
   createWebSearchOrFetchAbility,
@@ -25,10 +27,10 @@ import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
 import { calculateTypingDelay, delay, splitSentences } from './core/split'
 import { MessageGateway } from './gateway/filter'
-import { HierarchicalMemoryService } from './memory'
+import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
 export const config = Tsu.Object({
-  apiKey: Tsu.String().default(''),
+  apiKey: Tsu.String(),
   modelName: Tsu.String().default('gemini-3.5-flash-lite'),
   proxy: Tsu.String().optional(),
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
@@ -58,11 +60,18 @@ export function main(ctx: Context, cfg: Config) {
     allowedPlatforms: cfg.allowedPlatforms
   })
 
-  const memory = new HierarchicalMemoryService(cfg.apiKey, undefined, 20, cfg.proxy, cfg.modelName)
+  const memory = new HierarchicalMemoryService(
+    cfg.modelName,
+    cfg.apiKey,
+    path.join(ctx.baseDir.data, 'memory.db'),
+    20,
+    cfg.proxy
+  )
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
   abilityManager.register(createCrossPlatformRecallAbility(memory))
+  abilityManager.register(createPublicMasterRecallAbility(memory))
   abilityManager.register(createSearchPastMemoriesAbility(memory))
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(fileReadOrWriteAbility)
@@ -70,9 +79,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
 
-  const geminiClient = cfg.apiKey
-    ? new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })
-    : null
+  const geminiClient = new GeminiClient({ apiKey: cfg.apiKey, modelName: cfg.modelName, proxy: cfg.proxy })
 
   ctx.midware(async (next, session) => {
     if (session.channelId || session.guildId) return next()
@@ -114,22 +121,20 @@ export function main(ctx: Context, cfg: Config) {
         else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
       }
 
-      // 记忆作用域隔离（群聊物理隔离，主人认知全局统一于 __master__）
-      const scopeKey = groupId ? `${platform}:group:${groupId}` : `${platform}:private:${userId}`
+      const scope = groupId ? groupScope(platform, groupId) : privateScope(platform, userId)
+      const scopeKey = formatScopeKey(scope)
       const profileKey = isOwner ? '__master__' : `${platform}:${userId}`
 
       const abilityCtx = { userId, groupId, platform, identity, isOwner }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
       // 非主人群聊中，绝不注入主人的专属画像与记忆，防止群友对话串味认错人
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? profileKey : ''))
+      extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? profileKey : undefined))
 
-      // 如果是群聊日常偶尔插嘴，在提示词中追加提示：可以选择发言或保持沉默
       if (decision.reason === 'group_casual')
         extraContexts.push(
           '【群聊日常旁观提醒】你当前是路过偶尔围观群友聊天。如果你觉得他们的话题无聊或不想插嘴，请调用 choose_silence 工具保持静默；如果有想吐槽的，再做简短回应。'
         )
 
-      // 动态组装带“多态躯壳偏置”的人格 Prompt
       const systemPrompt = buildSystemPrompt(
         cfg,
         {
@@ -149,19 +154,17 @@ export function main(ctx: Context, cfg: Config) {
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
         groupId
-          ? `[${isOwner ? 'MASTER' : 'STRANGER'}]${session.sender.nickname}(ID:${userId})]) ${targetMessage}`
+          ? `[${isOwner ? 'OWNER' : 'GUEST'}][${session.sender.nickname ?? 'User'}(${userId})] ${targetMessage}`
           : targetMessage,
         abilityManager,
         abilityCtx,
         cfg.maxToolLoops
       )
 
-      // 如果 AI 主动选择了沉默工具，则静默结束本次链路
       if (!reply || reply === '__NO_REPLY__') return
 
       memory.recordTurn(scopeKey, profileKey, targetMessage, reply, session.sender?.nickname ?? String(userId))
 
-      // 拟人打字机分句与呼吸感延迟发送
       const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
       for (let i = 0; i < segments.length; i++) {
         const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
