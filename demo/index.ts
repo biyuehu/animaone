@@ -16,7 +16,7 @@ if (!apiKey) {
 }
 
 // 通过 Bun 原生 fetch 支持代理
-const customFetch = (url: any, init: any) =>
+const customFetch = (url: URL | RequestInfo, init?: RequestInit) =>
   fetch(url, {
     ...init,
     ...(proxyUrl ? { proxy: proxyUrl } : {})
@@ -25,7 +25,7 @@ const customFetch = (url: any, init: any) =>
 const ai = new GoogleGenAI({
   apiKey,
   httpOptions: {
-    fetch: customFetch as any
+    fetch: customFetch as typeof fetch
   }
 })
 
@@ -100,8 +100,8 @@ async function main() {
           process.stdout.write(chunk.text || '')
         }
         process.stdout.write('\n')
-      } catch (err: any) {
-        console.error('\n❌ 请求发生错误:', err?.message || err)
+      } catch (err) {
+        console.error('\n❌ 请求发生错误:', err instanceof Error ? err.message : err)
       }
     }
   } finally {
