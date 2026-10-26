@@ -1,10 +1,30 @@
-export interface ChatMessage {
-  role: 'user' | 'model'
-  content: string
-  timestamp: number
-  userId?: string
-  senderName?: string
-}
+export type ChatMessage =
+  | {
+      readonly role: 'model'
+      readonly content: string
+      readonly timestamp: number
+    }
+  | {
+      readonly role: 'user'
+      readonly content: string
+      readonly timestamp: number
+      readonly userId: string
+      readonly senderName: string
+    }
+
+export const modelMessage = (content: string, timestamp = Date.now()): ChatMessage => ({
+  role: 'model',
+  content,
+  timestamp
+})
+
+export const userMessage = (content: string, userId = '', senderName = '', timestamp = Date.now()): ChatMessage => ({
+  role: 'user',
+  content,
+  userId,
+  senderName,
+  timestamp
+})
 
 export class SlidingWindowMemory {
   private readonly history: Map<string, ChatMessage[]> = new Map()
@@ -15,28 +35,15 @@ export class SlidingWindowMemory {
     const cleaned = content.trim()
     if (!cleaned) return
 
-    let list = this.history.get(scopeKey)
-    if (!list) {
-      list = []
-      this.history.set(scopeKey, list)
-    }
+    const list = this.history.get(scopeKey) ?? []
+    if (!this.history.has(scopeKey)) this.history.set(scopeKey, list)
 
-    list.push({
-      role,
-      content: cleaned,
-      timestamp: Date.now(),
-      userId,
-      senderName
-    })
-
-    // 维持固定窗口大小
-    if (list.length > this.maxTurns) {
-      list.splice(0, list.length - this.maxTurns)
-    }
+    list.push(role === 'model' ? modelMessage(cleaned) : userMessage(cleaned, userId, senderName))
+    if (list.length > this.maxTurns) list.splice(0, list.length - this.maxTurns)
   }
 
   getContext(scopeKey: string): ChatMessage[] {
-    return this.history.get(scopeKey) || []
+    return this.history.get(scopeKey) ?? []
   }
 
   has(scopeKey: string): boolean {
