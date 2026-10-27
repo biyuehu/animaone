@@ -149,7 +149,7 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
             : `${ctx.platform}:private:${ctx.userId}`
           : ''
         memory.getDatabase().upsertFact('__master__', args.fact, cat, vis, sourceScope)
-        return { success: true, message: `已成功把事实写入大哥哥的长期档案：${args.fact} (${vis})` }
+        return { success: true, message: `已成功把事实写入主人的长期档案：${args.fact} (${vis})` }
       }
     }
   }
@@ -299,7 +299,7 @@ export function createSearchChannelPublicMemoriesAbility(memory: HierarchicalMem
   return {
     name: 'search_channel_public_memories',
     description:
-      '翻阅当前群聊内发生过的公开历史对话与事件总结，也可检索关于大哥哥（主人）允许公开的对外人设。严格受本群作用域与隐私限制。',
+      '翻阅当前群聊内发生过的公开历史对话与事件总结，也可检索关于主人允许公开的对外人设。严格受本群作用域与隐私限制。',
     toolDefinition: {
       ownerOnly: false,
       parameters: {

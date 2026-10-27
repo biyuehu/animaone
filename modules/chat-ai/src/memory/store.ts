@@ -105,10 +105,12 @@ export class MemoryDatabase {
         role TEXT NOT NULL,
         user_id TEXT DEFAULT '',
         sender_name TEXT DEFAULT '',
+        message_id TEXT DEFAULT '',
         content TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_recent_scope ON recent_messages(scope_key);
+      CREATE INDEX IF NOT EXISTS idx_recent_msg_id ON recent_messages(message_id);
 
       -- 插件系统元数据表（存储首次启动时间等核心档案）
       CREATE TABLE IF NOT EXISTS bot_metadata (
@@ -127,6 +129,11 @@ export class MemoryDatabase {
     try {
       this.db.exec(`
         ALTER TABLE recent_messages ADD COLUMN sender_name TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE recent_messages ADD COLUMN message_id TEXT DEFAULT '';
       `)
     } catch {}
     try {
@@ -333,13 +340,14 @@ export class MemoryDatabase {
     role: 'user' | 'model',
     content: string,
     userId = '',
-    senderName = ''
+    senderName = '',
+    messageId = ''
   ): void {
     this.db
       .prepare(
-        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, message_id, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(scopeKey, role, userId, senderName, content, Date.now())
+      .run(scopeKey, role, userId, senderName, messageId, content, Date.now())
 
     // 保持每个 scope 最多保留 30 条最近消息
     this.db
@@ -350,6 +358,19 @@ export class MemoryDatabase {
         )
       `)
       .run(scopeKey, scopeKey)
+  }
+
+  public findMessageByMessageId(
+    messageId: string
+  ): { role: string; content: string; senderName: string; userId: string } | null {
+    if (!messageId) return null
+    return (
+      (this.db
+        .prepare(
+          'SELECT role, content, sender_name as senderName, user_id as userId FROM recent_messages WHERE message_id = ? ORDER BY id DESC LIMIT 1'
+        )
+        .get(messageId) as { role: string; content: string; senderName: string; userId: string } | undefined) ?? null
+    )
   }
 
   public loadRecentMessages(scopeKey: string, limit: number): ChatMessage[] {

@@ -16,6 +16,7 @@ export class HierarchicalMemoryService {
   private readonly activeChatBuffer: Map<string, { role: 'user' | 'model'; content: string; timestamp: number }[]> =
     new Map()
   private readonly masterSpeechBuffer: string[] = []
+  private pendingDreamSpoken: string | null = null
   private readonly maxTurns: number
   private readonly summaryInterval: number
   private readonly activeMemoryCapacity: number
@@ -42,10 +43,16 @@ export class HierarchicalMemoryService {
    * 仅滑入短期记忆滑窗和数据库，供随时艾特锐评使用；
    * 绝对不增加总结计数、不触发任何大模型任务，0 Token 消耗。
    */
-  public recordPassiveMessage(scopeKey: string, userId: string, content: string, senderName = ''): void {
+  public recordPassiveMessage(
+    scopeKey: string,
+    userId: string,
+    content: string,
+    senderName = '',
+    messageId = ''
+  ): void {
     if (!content.trim()) return
     this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName)
-    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName)
+    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
   }
 
   /**
@@ -61,12 +68,13 @@ export class HierarchicalMemoryService {
     userMsg: string,
     modelMsg: string,
     senderName = '',
-    isOwner = false
+    isOwner = false,
+    messageId = ''
   ): void {
     this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
 
-    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName)
+    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
     this.db.saveRecentMessage(scopeKey, 'model', modelMsg)
 
     // 1. 维护会话事件缓冲区
@@ -104,7 +112,15 @@ export class HierarchicalMemoryService {
   }
 
   public async triggerDream(ownerId: string): Promise<string | null> {
-    return this.summarizer ? this.summarizer.dreamReflection(ownerId) : null
+    const spoken = this.summarizer ? await this.summarizer.dreamReflection(ownerId) : null
+    if (spoken) this.pendingDreamSpoken = spoken
+    return spoken
+  }
+
+  public consumePendingDream(): string | null {
+    const dream = this.pendingDreamSpoken
+    this.pendingDreamSpoken = null
+    return dream
   }
 
   public async tickHeartbeat(ownerId?: string): Promise<void> {

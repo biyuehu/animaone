@@ -1,6 +1,6 @@
 import path from 'node:path'
 // import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
-import { type AdapterConfig, type Context, Messages, Symbols, sleep, Tsu } from 'kotori-bot'
+import { type AdapterConfig, type Api, type Context, Messages, Symbols, sleep, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
@@ -100,7 +100,18 @@ export function main(ctx: Context, cfg: Config) {
   const heartbeatTask = ctx.task({ cron: '*/3 * * * *', timeZone: 'Asia/Shanghai', start: true }, async () => {
     if (isHeartbeatRunning) return
     isHeartbeatRunning = true
-    await memory.tickHeartbeat().catch((e) => {
+    let masterId = ''
+    const botMap: Map<string, Set<Api>> = ctx[Symbols.bot]
+    if (botMap)
+      for (const apis of botMap.values())
+        for (const api of apis) {
+          const m = String((api.adapter?.config as AdapterConfig)?.master || '')
+          if (m) {
+            masterId = m
+            break
+          }
+        }
+    await memory.tickHeartbeat(masterId || undefined).catch((e) => {
       ctx.logger.error(`Memory heartbeat failed: ${e instanceof Error ? e.message : String(e)}`)
     })
     isHeartbeatRunning = false
@@ -150,7 +161,8 @@ export function main(ctx: Context, cfg: Config) {
           formatScopeKey(groupScope(adapter.platform, groupId)),
           userId,
           sanitizeCqCodes(rawMessage),
-          session.sender.nickname
+          session.sender.nickname,
+          session.messageId
         )
       return next()
     }
@@ -170,9 +182,17 @@ export function main(ctx: Context, cfg: Config) {
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
       extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? '__master__' : undefined))
 
+      if (isOwner) {
+        const dream = memory.consumePendingDream()
+        if (dream)
+          extraContexts.push(
+            `【潜意识昨夜梦境/顿悟提醒】你昨夜在潜意识中曾产生了以下顿悟或梦境灵感：“${dream}”。如果在当前对话中自然契合，你可以像刚睡醒或随口提起一样轻柔地向主人分享。`
+          )
+      }
+
       if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
         extraContexts.push(
-          '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默；如果对话很自然且有话想说，请正常简短回应。'
+          '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默。'
         )
 
       const systemPrompt = buildSystemPrompt(
@@ -197,14 +217,14 @@ export function main(ctx: Context, cfg: Config) {
 
       const now = new Date()
       const timeTag = `[${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}]`
-      const currentInput = groupId
-        ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${targetMessage}`
-        : `${timeTag} ${targetMessage}`
+      const quotedMsg = decision.replyId ? memory.getDatabase().findMessageByMessageId(decision.replyId) : null
 
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
-        currentInput,
+        groupId
+          ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''}${targetMessage}`
+          : `${timeTag} ${targetMessage}`,
         abilityManager,
         abilityCtx,
         cfg.maxToolLoops,
@@ -223,7 +243,15 @@ export function main(ctx: Context, cfg: Config) {
       if (groupId) gateway.recordBotSpeech(groupId)
 
       queueMicrotask(() => {
-        memory.recordTurn(scopeKey, userId, targetMessage, cleanReply, session.sender.nickname, isOwner)
+        memory.recordTurn(
+          scopeKey,
+          userId,
+          targetMessage,
+          cleanReply,
+          session.sender.nickname,
+          isOwner,
+          session.messageId
+        )
       })
 
       const segments = cfg.enableHumanDelay ? splitSentences(cleanReply, cfg.splitThreshold) : [cleanReply]

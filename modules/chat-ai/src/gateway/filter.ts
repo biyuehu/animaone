@@ -20,6 +20,7 @@ export type GatewayDecision =
       readonly reason: 'owner_direct' | 'group_direct' | 'group_casual' | 'group_followup'
       readonly cleanedMessage: string
       readonly needTargetUser?: boolean
+      readonly replyId?: string
     }
   | {
       readonly allow: false
@@ -29,12 +30,14 @@ export type GatewayDecision =
 export const allowedDecision = (
   reason: 'owner_direct' | 'group_direct' | 'group_casual' | 'group_followup',
   cleanedMessage: string,
-  needTargetUser = false
+  needTargetUser = false,
+  replyId?: string
 ): GatewayDecision => ({
   allow: true,
   reason,
   cleanedMessage,
-  needTargetUser
+  needTargetUser,
+  replyId
 })
 
 export const rejectedDecision = (reason: 'platform_rejected' | 'rejected' = 'rejected'): GatewayDecision => ({
@@ -101,14 +104,15 @@ export class MessageGateway {
     )
       return allowedDecision(
         'group_direct',
-        `${replyMatch ? `[CQ:reply,id=${replyMatch[1]}]` : ''}${sanitizeCqCodes(
+        sanitizeCqCodes(
           rawMessage
             .replace(/\[CQ:reply,id=\d+\]/gi, '')
             .replaceAll(atCq, '')
             .replaceAll(`@${botName}`, '')
             .trim() || '[艾特了你]'
-        )}`.trim(),
-        isChatBurst
+        ),
+        isChatBurst,
+        replyMatch?.[1]
       )
 
     // 3. 水群跟帖判定（Follow-up Window）：

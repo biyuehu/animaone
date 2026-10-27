@@ -17,10 +17,9 @@ export class MemorySummarizer {
     this.modelName = modelName
     let fetchFn: typeof fetch | undefined
     if (proxy) {
-      const proxyUrl = proxy.startsWith('http') ? proxy : `http://${proxy}`
-      const agent = new ProxyAgent(proxyUrl)
-      // biome-ignore lint/suspicious/noExplicitAny: fetch override requires matching interface
-      fetchFn = ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher: agent })) as any
+      const agent = new ProxyAgent(proxy.startsWith('http') ? proxy : `http://${proxy}`)
+      fetchFn = ((url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) =>
+        undiciFetch(url as string, { ...(init as object), dispatcher: agent })) as unknown as typeof fetch
     }
 
     this.ai = new GoogleGenAI({

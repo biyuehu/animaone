@@ -22,10 +22,9 @@ export class GeminiClient {
 
     let fetchFn: typeof fetch | undefined
     if (config.proxy) {
-      const proxyUrl = config.proxy.startsWith('http') ? config.proxy : `http://${config.proxy}`
-      const agent = new ProxyAgent(proxyUrl)
-      // biome-ignore lint/suspicious/noExplicitAny: fetch override requires matching interface
-      fetchFn = ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher: agent })) as any
+      const agent = new ProxyAgent(config.proxy.startsWith('http') ? config.proxy : `http://${config.proxy}`)
+      fetchFn = ((url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) =>
+        undiciFetch(url as string, { ...(init as object), dispatcher: agent })) as unknown as typeof fetch
     }
 
     this.ai = new GoogleGenAI({
