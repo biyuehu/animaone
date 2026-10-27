@@ -17,11 +17,11 @@ import {
 } from './ability/tools'
 import {
   DEFAULT_BASE_PERSONA,
-  DEFAULT_BOT_NAME,
+  DEFAULT_BOT_NAMES,
   DEFAULT_GUEST_GROUP,
-  DEFAULT_OWNER_GROUP,
-  DEFAULT_OWNER_NICK,
-  DEFAULT_OWNER_PRIVATE,
+  DEFAULT_MASTER_GROUP,
+  DEFAULT_MASTER_NICK,
+  DEFAULT_MASTER_PRIVATE,
   DEFAULT_PLATFORM_ASPECTS
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
@@ -37,11 +37,11 @@ export const config = Tsu.Object({
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]).describe('启用群聊感知的白名单群号列表'),
   allowedPlatforms: Tsu.Array(Tsu.String()).default(['cmd', 'onebot']).describe('允许响应用于交互的平台列表'),
   groupActiveRate: Tsu.Number().range(0, 1).default(0.05).describe('群聊日常偶发插话/接梗的主动回复概率 (0~1)'),
-  botName: Tsu.String().default(DEFAULT_BOT_NAME).describe('机器人名称'),
-  ownerNick: Tsu.String().default(DEFAULT_OWNER_NICK).describe('对主人的默认基础称呼'),
-  basePersona: Tsu.String().default(DEFAULT_BASE_PERSONA).describe('基础人格设定与言语准则 Prompt'),
-  ownerPrivate: Tsu.String().default(DEFAULT_OWNER_PRIVATE).describe('面对主人私聊时的补充人设'),
-  ownerGroup: Tsu.String().default(DEFAULT_OWNER_GROUP).describe('在群聊中与主人对话时的补充人设'),
+  botNames: Tsu.Array(Tsu.String()).default(DEFAULT_BOT_NAMES).describe('机器人名称列表，第一个为默认名'),
+  masterNick: Tsu.String().default(DEFAULT_MASTER_NICK).describe('对主人的默认基础称呼'),
+  basePersona: Tsu.String().default(DEFAULT_BASE_PERSONA).describe('基础人格与灵魂设定 Prompt'),
+  masterPrivate: Tsu.String().default(DEFAULT_MASTER_PRIVATE).describe('面对主人私聊时的补充人设'),
+  masterGroup: Tsu.String().default(DEFAULT_MASTER_GROUP).describe('在群聊中与主人对话时的补充人设'),
   guestGroup: Tsu.String().default(DEFAULT_GUEST_GROUP).describe('在群聊中与普通群员对话时的补充人设'),
   platformAspects: Tsu.Custom<Record<string, string>>((x) => {
     if (!x || typeof x !== 'object') return false
@@ -93,14 +93,15 @@ export function main(ctx: Context, cfg: Config) {
     cfg.summaryCharLimit,
     cfg.activeMemoryCapacity,
     {
-      botName: cfg.botName,
-      ownerNick: cfg.ownerNick,
+      botName: cfg.botNames[0],
+      masterNick: cfg.masterNick,
       basePersona: cfg.basePersona
     },
     cfg.idleCompactTimeout,
-    cfg.enableDreamReflection
+    cfg.enableDreamReflection,
+    ctx.logger
   )
-  const abilityManager = new AbilityManager()
+  const abilityManager = new AbilityManager(ctx.logger)
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
   abilityManager.register(createCrossPlatformRecallAbility(memory))
@@ -156,7 +157,7 @@ export function main(ctx: Context, cfg: Config) {
     const { adapter } = session.api
     const masterId = String((adapter.config as AdapterConfig).master)
     const userId = String(session.userId)
-    const isOwner = Boolean(masterId) && userId === masterId
+    const isMaster = Boolean(masterId) && userId === masterId
     const groupId = session.groupId ? String(session.groupId) : undefined
 
     const decision = gateway.evaluate(
@@ -166,7 +167,7 @@ export function main(ctx: Context, cfg: Config) {
       adapter.platform,
       masterId,
       adapter.selfId,
-      cfg.botName
+      cfg.botNames
     )
     if (!decision.allow) {
       if (
@@ -187,7 +188,8 @@ export function main(ctx: Context, cfg: Config) {
     const targetMessage = decision.cleanedMessage ?? rawMessage
 
     if (!geminiClient) {
-      if (isOwner && !groupId) await session.quick('欸？笨蛋主人，你还没在配置里填 GEMINI_API_KEY 呢！快去填好再找我～')
+      if (isMaster && !groupId)
+        await session.quick('欸？笨蛋主人，你还没在配置里填 GEMINI_API_KEY 呢！快去填好再找我～') // TODO
       return next()
     }
 
@@ -195,16 +197,18 @@ export function main(ctx: Context, cfg: Config) {
       const scopeKey = formatScopeKey(
         groupId ? groupScope(adapter.platform, groupId) : privateScope(adapter.platform, userId)
       )
-      const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isOwner }
+      const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isMaster }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? '__master__' : undefined))
+      extraContexts.push(...memory.assemblePromptContext(scopeKey, isMaster ? '__master__' : undefined))
 
-      if (isOwner) {
+      if (isMaster) {
         const dream = memory.consumePendingDream()
-        if (dream)
+        if (dream) {
+          ctx.logger.info(`Consumed pending dream reflection for master: "${dream}"`)
           extraContexts.push(
             `【潜意识昨夜梦境/顿悟提醒】你昨夜在潜意识中曾产生了以下顿悟或梦境灵感：“${dream}”。如果在当前对话中自然契合，你可以像刚睡醒或随口提起一样轻柔地向主人分享。`
           )
+        }
       }
 
       if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
@@ -221,7 +225,7 @@ export function main(ctx: Context, cfg: Config) {
           senderName: session.sender.nickname,
           userId,
           groupId,
-          isOwner,
+          isMaster,
           birthTime: memory.getBirthTime()
         },
         extraContexts
@@ -229,7 +233,7 @@ export function main(ctx: Context, cfg: Config) {
 
       const startTime = Date.now()
       ctx.logger.info(
-        `Received message from <cyan>${isOwner ? 'OWNER' : 'USER'}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
+        `Received message [type: <magenta>${decision.reason}</magenta>] from <cyan>${isMaster ? 'MASTER' : 'USER'}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
       )
 
       const now = new Date()
@@ -241,12 +245,11 @@ export function main(ctx: Context, cfg: Config) {
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
         groupId
-          ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
+          ? `${timeTag} [${isMaster ? 'MASTER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
           : `${timeTag} ${targetMessage}`,
         abilityManager,
         abilityCtx,
-        cfg.maxToolLoops,
-        decision.reason === 'group_direct' || decision.reason === 'owner_direct'
+        cfg.maxToolLoops
       )
 
       ctx.logger.info(
@@ -264,7 +267,7 @@ export function main(ctx: Context, cfg: Config) {
       if (groupId) gateway.recordBotSpeech(groupId)
 
       queueMicrotask(() => {
-        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender.nickname, isOwner, session.messageId)
+        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender.nickname, isMaster, session.messageId)
       })
 
       const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
@@ -277,7 +280,10 @@ export function main(ctx: Context, cfg: Config) {
 
       for (let i = 0; i < segments.length; i++) {
         const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
-        if (delayTime > 0) await sleep(delayTime)
+        if (delayTime > 0) {
+          ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${segments.length}`)
+          await sleep(delayTime)
+        }
         await session.quick(
           i === 0 && groupId && decision.needTargetUser
             ? Math.random() > 0.5
@@ -289,7 +295,7 @@ export function main(ctx: Context, cfg: Config) {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       ctx.logger.error(`Failed to handle message: ${errorMsg}`)
-      if (isOwner && !groupId) await session.quick(`切，跟 Gemini 通讯翻车了：${errorMsg}。笨蛋主人快去排查一下～`)
+      if (isMaster && !groupId) await session.quick(`切，跟 Gemini 通讯翻车了：${errorMsg}。笨蛋主人快去排查一下～`) // TODO
     }
   }, 100)
 }

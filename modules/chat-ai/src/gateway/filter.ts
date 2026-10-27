@@ -12,14 +12,14 @@ export function sanitizeCqCodes(message: string): string {
     .replace(/\[CQ:record,[^\]]*\]/gi, '[语音]')
     .replace(/\[CQ:video,[^\]]*\]/gi, '[视频]')
     .replace(/\[CQ:face,[^\]]*\]/gi, '[表情]')
-    .replace(/\[CQ:at,qq=(.*?)\]/gi, '@$1')
+    .replace(/\[CQ:at,qq=(.*?)\]/gi, '@$1(其他人)')
   // .replace(/\[CQ:[a-z]+,[^\]]*\]/gi, '')
 }
 
 export type GatewayDecision =
   | {
       readonly allow: true
-      readonly reason: 'owner_direct' | 'group_direct' | 'group_casual' | 'group_followup'
+      readonly reason: 'master_direct' | 'group_direct' | 'group_casual' | 'group_followup'
       readonly cleanedMessage: string
       readonly needTargetUser?: boolean
       readonly replyId?: string
@@ -30,9 +30,9 @@ export type GatewayDecision =
     }
 
 export const allowedDecision = (
-  reason: 'owner_direct' | 'group_direct' | 'group_casual' | 'group_followup',
+  reason: 'master_direct' | 'group_direct' | 'group_casual' | 'group_followup',
   cleanedMessage: string,
-  needTargetUser = false,
+  needTargetUser?: boolean,
   replyId?: string
 ): GatewayDecision => ({
   allow: true,
@@ -42,7 +42,7 @@ export const allowedDecision = (
   replyId
 })
 
-export const rejectedDecision = (reason: 'platform_rejected' | 'rejected' = 'rejected'): GatewayDecision => ({
+export const rejectedDecision = (reason: 'platform_rejected' | 'rejected'): GatewayDecision => ({
   allow: false,
   reason
 })
@@ -74,14 +74,14 @@ export class MessageGateway {
     platform: string,
     masterId: string,
     botSelfId: string,
-    botName: string
+    botNames: string[]
   ): GatewayDecision {
     if (this.config.allowedPlatforms.length > 0 && (!platform || !this.config.allowedPlatforms.includes(platform)))
       return rejectedDecision('platform_rejected')
 
     if (!groupId)
       return masterId && String(userId) === String(masterId)
-        ? allowedDecision('owner_direct', sanitizeCqCodes(rawMessage))
+        ? allowedDecision('master_direct', sanitizeCqCodes(rawMessage))
         : rejectedDecision('rejected')
 
     if (
@@ -96,23 +96,17 @@ export class MessageGateway {
     this.recentMsgTimestamps.set(groupId, timestamps)
     const isChatBurst = timestamps.length >= (this.config.burstThreshold ?? 8)
 
-    const replyMatch = rawMessage.match(/\[CQ:reply,id=(\d+)\]/i)
     const atCq = botSelfId ? `[CQ:at,qq=${botSelfId}]` : ''
     const isAtMe = (atCq && rawMessage.includes(atCq)) || (botSelfId && rawMessage.includes(`@${botSelfId}`))
-    if (replyMatch || isAtMe || rawMessage.includes(`@${botName}`) || rawMessage.includes(botName))
-      return allowedDecision(
-        'group_direct',
-        sanitizeCqCodes(
-          rawMessage
-            .replace(/\[CQ:reply,id=\d+\]/gi, '')
-            .replaceAll(atCq, '')
-            .replaceAll(`@${botSelfId}`, '')
-            .replaceAll(`@${botName}`, '')
-            .trim() || '[艾特了你]'
-        ),
-        isChatBurst,
-        replyMatch?.[1]
-      )
+    const isNamed = botNames.some((name) => rawMessage.includes(name) || rawMessage.includes(`@${name}`))
+    if (isAtMe || isNamed) {
+      let cleaned = rawMessage
+        .replace(/\[CQ:reply,id=\d+\]/gi, '')
+        .replaceAll(atCq, '')
+        .replaceAll(`@${botSelfId}`, '')
+      for (const name of botNames) cleaned = cleaned.replaceAll(`@${name}`, '').replaceAll(name, '')
+      return allowedDecision('group_direct', sanitizeCqCodes(cleaned.trim() || '[艾特了你]'), isChatBurst)
+    }
 
     // 3. 水群跟帖判定（Follow-up Window）：
     // 若机器人在本群最近指定窗口时间内发过言，且群友紧接着发出有意义的回复（>= 2字），
