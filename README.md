@@ -9,7 +9,7 @@
 ```mermaid
 flowchart TD
     Msg["外部输入消息 (OneBot / CMD)"] --> GW["网关过滤层 (MessageGateway)"]
-    
+
     subgraph Gateway["1. 网关过滤层 (gateway/filter.ts)"]
         GW -->|"白名单校验 & @Bot / 名字匹配"| Direct["主动对话 (owner_direct / group_direct)"]
         GW -->|"长度>=6 且命中 groupActiveRate"| Casual["旁观插话 (group_casual)"]
@@ -31,7 +31,7 @@ flowchart TD
         Env["环境感知 (群聊/私聊、平台实例)"]
         Identity["身份分支 (ownerPrivate / ownerGroup / guestGroup)"]
         Prompt["System Prompt 组装<br/>(L0 核心事实置于最高优先级)"]
-        
+
         SysTime --> Prompt
         Env --> Prompt
         Identity --> Prompt

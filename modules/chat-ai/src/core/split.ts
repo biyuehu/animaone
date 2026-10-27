@@ -1,17 +1,23 @@
 /**
  * 多话自然分割（对齐 reference/src/utils.ts 实现）：
- * - 如果包含大段代码块或多行代码结构，保持整体发送，绝不切断代码；
- * - 普通聊天按标点符号（。！？!?…）分段并智能合并短句，确保自然呼吸感与分句体验。
+ * - 如果文本总长度达到 threshold（默认 80），或包含列表/代码结构，则整体发送，避免技术或深度回复被切割得稀碎；
+ * - 普通短句聊天按标点符号（。！？!?…）分段并智能合并短句，确保自然呼吸感与分句体验。
  */
-export function splitSentences(text: string, minLength = 12, maxLength = 35): string[] {
-  // 保持代码块或长文本结构完整，绝不把代码切碎
+export function splitSentences(text: string, threshold: number, minLength = 12, maxLength = 35): string[] {
+  // 达到或超过长文本阈值直接完整返回
+  if (threshold > 0 && text.trim().length >= threshold) {
+    return [text.replaceAll(/\n\n/g, '\n').trim()]
+  }
+
+  // 保持代码块、列表或长文本结构完整
   if (
     text.includes('```') ||
     text.includes('import ') ||
     text.includes('function ') ||
     text.includes('export ') ||
     text.includes('{\n') ||
-    text.includes('[\n')
+    text.includes('[\n') ||
+    /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text)
   )
     return [text.trim()]
 

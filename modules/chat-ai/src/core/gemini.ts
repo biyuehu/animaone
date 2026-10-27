@@ -90,7 +90,9 @@ export class GeminiClient {
 
       const loopDuration = Date.now() - loopStartTime
       if (!response) {
-        this.logger?.warn(`Loop <yellow>${loops}</yellow>: Model returned empty response (<yellow>${loopDuration}ms</yellow>)`)
+        this.logger?.warn(
+          `Loop <yellow>${loops}</yellow>: Model returned empty response (<yellow>${loopDuration}ms</yellow>)`
+        )
         return ''
       }
 
@@ -104,14 +106,23 @@ export class GeminiClient {
           .trim()
         const textResult = combined || (response.text?.trim() ?? '')
         if (!textResult) {
+          const promptFeedback = (response as { promptFeedback?: { blockReason?: string } }).promptFeedback
           const rawData = {
             candidates: response.candidates,
-            promptFeedback: (response as { promptFeedback?: unknown }).promptFeedback,
+            promptFeedback,
             usageMetadata: response.usageMetadata
           }
           this.logger?.warn(
             `Loop <yellow>${loops}</yellow>: Model returned 0 text chars (<yellow>${loopDuration}ms</yellow>, data: <red>${JSON.stringify(rawData)}</red>)`
           )
+
+          if (promptFeedback?.blockReason === 'PROHIBITED_CONTENT') {
+            this.logger?.error(
+              `PROHIBITED_CONTENT triggered! Dumping request contents:\n` +
+                `--- [System Prompt] ---\n${systemPrompt}\n` +
+                `--- [Contents (History + Input)] ---\n${JSON.stringify(contents, null, 2)}`
+            )
+          }
         } else {
           this.logger?.info(
             `Text generated in loop <yellow>${loops}</yellow> (<yellow>${loopDuration}ms</yellow>), response: <green>${textResult.length}</green> chars`

@@ -6,6 +6,59 @@
 
 ## 核心特性
 
+```mermaid
+flowchart TD
+    Msg["外部输入消息 (OneBot / CMD)"] --> GW["网关过滤层 (MessageGateway)"]
+
+    subgraph Gateway["1. 网关过滤层 (gateway/filter.ts)"]
+        GW -->|"白名单校验 & @Bot / 名字匹配"| Direct["主动对话 (owner_direct / group_direct)"]
+        GW -->|"长度>=6 且命中 groupActiveRate"| Casual["旁观插话 (group_casual)"]
+        GW -->|"未命中"| Reject["阻断忽略 (rejected)"]
+    end
+
+    Direct --> Core["2. 编排中枢 (index.tsx)"]
+    Casual --> Core
+
+    subgraph MemoryLayer["3. 认知记忆体系 (memory/ & core/retrieval.ts)"]
+        L0[("Level 0: user_profiles<br/>主人长期事实 (时序追加, [ID][日期]共存)")]
+        L1[("Level 1: recent_messages & SlidingWindow<br/>近期对话上下文 (最多30条)")]
+        L2[("Level 2: memory_nodes & memory_links<br/>长期事件图谱 (平聊不灌入，按需主动检索)")]
+        BM25["core/retrieval.ts<br/>Unigram + Bigram + BM25 + 半衰期衰减"]
+    end
+
+    subgraph Persona["4. 人设与感知装配 (core/persona.ts)"]
+        SysTime["时间感知 (诞生天数、当前时刻)"]
+        Env["环境感知 (群聊/私聊、平台实例)"]
+        Identity["身份分支 (ownerPrivate / ownerGroup / guestGroup)"]
+        Prompt["System Prompt 组装<br/>(L0 核心事实置于最高优先级)"]
+
+        SysTime --> Prompt
+        Env --> Prompt
+        Identity --> Prompt
+        L0 --> Prompt
+    end
+
+    Core --> Persona
+    Core --> L1
+
+    subgraph Ability["5. 能力与工具系统 (ability/)"]
+        Tools["Function Declarations<br/>- search_past_memories (BM25 + Graph BFS 2跳 + cluesToExplore)<br/>- recall_cross_platform_chat<br/>- recall_master_public_profile (群友限权可见)<br/>- remember_master_fact (主人专属)<br/>- choose_silence (水群静默)<br/>- web_search_or_fetch / terminal / file"]
+    end
+
+    Prompt --> Gemini["6. 核心驱动层 (core/gemini.ts)"]
+    L1 --> Gemini
+    Tools <-->|"Tool Calls (最多 maxToolLoops 轮)"| Gemini
+    BM25 <--> Tools
+    L2 <--> Tools
+
+    subgraph Output["7. 响应与后台沉淀"]
+        Gemini -->|"__NO_REPLY__"| Drop["静默丢弃"]
+        Gemini -->|"文本回复"| Split["分句拆条与打字延迟 (core/split.ts)"]
+        Split --> Session["Session Quick 发送下发"]
+        Session -.->|"queueMicrotask (非阻塞异步)"| Compact["后台记录与满10轮提炼沉淀 (memory.recordTurn)"]
+    end
+```
+
 - **三级认知记忆系统**
   - **Level 0（核心画像与长期事实）**：存储于 `user_profiles`，无条件注入 Prompt 最高执行区。支持绝对时间戳 `[ID][YYYY/MM/DD]`，采用“时序共存”机制，新旧偏好发生改变时物理追加、拒绝 CRUD 暴力覆盖，由大模型根据时间推移自主感知打脸与偏好演化。
   - **Level 1（活跃对话工作区）**：存储于 `recent_messages`，维持严格的滑动窗口（Sliding Window），负责当前会话任务的无缝连贯。

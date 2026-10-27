@@ -47,6 +47,9 @@ export const config = Tsu.Object({
     return true
   }).default(DEFAULT_PLATFORM_ASPECTS),
   enableHumanDelay: Tsu.Boolean().default(true),
+  splitThreshold: Tsu.Number().default(120),
+  maxTurns: Tsu.Number().default(20),
+  summaryInterval: Tsu.Number().default(10),
   allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot']),
   maxToolLoops: Tsu.Number().default(10)
 })
@@ -64,7 +67,8 @@ export function main(ctx: Context, cfg: Config) {
     cfg.modelName,
     cfg.apiKey,
     path.join(ctx.baseDir.data, 'memory.db'),
-    20,
+    cfg.maxTurns,
+    cfg.summaryInterval,
     cfg.proxy
   )
   const abilityManager = new AbilityManager()
@@ -182,7 +186,7 @@ export function main(ctx: Context, cfg: Config) {
         memory.recordTurn(scopeKey, profileKey, targetMessage, reply, session.sender?.nickname ?? String(userId))
       })
 
-      const segments = cfg.enableHumanDelay ? splitSentences(reply) : [reply]
+      const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
       for (let i = 0; i < segments.length; i++) {
         const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
         if (delayTime > 0) await delay(delayTime)

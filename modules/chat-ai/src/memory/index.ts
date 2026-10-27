@@ -13,8 +13,12 @@ export class HierarchicalMemoryService {
   private readonly slidingWindow: SlidingWindowMemory
   private readonly summarizer: MemorySummarizer | null = null
   private readonly uncommittedCount: Map<string, number> = new Map()
+  private readonly maxTurns: number
+  private readonly summaryInterval: number
 
-  constructor(modelName: string, apiKey: string, dbPath: string, maxTurns = 20, proxy?: string) {
+  constructor(modelName: string, apiKey: string, dbPath: string, maxTurns = 20, summaryInterval = 10, proxy?: string) {
+    this.maxTurns = maxTurns
+    this.summaryInterval = summaryInterval
     this.db = new MemoryDatabase(dbPath)
     this.slidingWindow = new SlidingWindowMemory(maxTurns)
     this.summarizer = new MemorySummarizer(apiKey, this.db, modelName, proxy)
@@ -30,7 +34,7 @@ export class HierarchicalMemoryService {
     const count = (this.uncommittedCount.get(scopeKey) ?? 0) + 1
     this.uncommittedCount.set(scopeKey, count)
 
-    if (count >= 10 && this.summarizer) {
+    if (count >= this.summaryInterval && this.summarizer) {
       this.uncommittedCount.set(scopeKey, 0)
       const history = this.slidingWindow.getContext(scopeKey)
       this.summarizer
@@ -55,7 +59,7 @@ export class HierarchicalMemoryService {
 
   public getShortTerm(scopeKey: string, masterId?: string): { role: 'user' | 'model'; content: string }[] {
     if (!this.slidingWindow.has(scopeKey))
-      this.slidingWindow.loadInitialMessages(scopeKey, this.db.loadRecentMessages(scopeKey, 20))
+      this.slidingWindow.loadInitialMessages(scopeKey, this.db.loadRecentMessages(scopeKey, this.maxTurns))
 
     const isGroup = parseScopeKey(scopeKey).type === 'group'
     return this.slidingWindow.getContext(scopeKey).map((m) =>
