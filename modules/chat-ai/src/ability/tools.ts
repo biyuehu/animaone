@@ -14,8 +14,24 @@ const execAsync = promisify(exec)
 export const SILENT_SENTINEL = '__NO_REPLY__'
 
 /**
- * 网页抓取与搜索工具
+ * 主动做梦灵感推演工具（仅主人可用）：
+ * 主动从潜意识中随机抽取旧记忆碎片进行概念碰撞，产生新顿悟并沉淀为灵感
  */
+export function createDreamReflectionAbility(memory: HierarchicalMemoryService): Ability {
+  return {
+    name: 'trigger_dream_reflection',
+    description: '仅主人可用。主动闭上眼睛做梦发呆，从潜意识抽取过往经历进行联想与反思，寻找新的灵感与认知。',
+    toolDefinition: {
+      ownerOnly: true,
+      parameters: { type: 'OBJECT', properties: {} },
+      execute: async (_args, ctx: AbilityContext) => ({
+        success: true,
+        reflectionSpoken:
+          (await memory.triggerDream(ctx.userId)) ?? '潜意识里稍微发了会儿呆，不过暂时没有形成特别鲜明的画面呢'
+      })
+    }
+  }
+}
 export function createWebSearchOrFetchAbility(proxy?: string): Ability {
   return {
     name: 'web_search_or_fetch',
@@ -452,11 +468,11 @@ export function createKotoriMessagingAbility(ctx: Context): Ability {
       },
       execute: async (
         args: { identity?: string; targetGroup?: string; targetUser?: string; message: string },
-        abilityCtx?: AbilityContext
+        abilityCtx: AbilityContext
       ) => {
         const botMap: Map<string, Set<Api>> = ctx[Symbols.bot]
         let targetApi: OnebotApi | null = null
-        const targetIdentity = args.identity ?? abilityCtx?.identity
+        const targetIdentity = args.identity ?? abilityCtx.identity
 
         if (botMap)
           for (const apis of botMap.values()) {
@@ -470,7 +486,7 @@ export function createKotoriMessagingAbility(ctx: Context): Ability {
             if (targetApi && (!targetIdentity || targetApi.adapter.identity === targetIdentity)) break
           }
 
-        if (!targetApi) return { error: `未找到匹配的适配器实例 (${targetIdentity ?? 'onebot'})` }
+        if (!targetApi) return { error: `未找到匹配的适配器实例 (${targetIdentity || 'onebot'})` }
 
         try {
           if (args.targetGroup) {

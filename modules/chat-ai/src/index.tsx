@@ -1,10 +1,11 @@
 import path from 'node:path'
 // import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
-import { type AdapterConfig, type Context, Symbols, Tsu } from 'kotori-bot'
+import { type AdapterConfig, type Context, Messages, Symbols, sleep, Tsu } from 'kotori-bot'
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
   createCrossPlatformRecallAbility,
+  createDreamReflectionAbility,
   createKotoriMessagingAbility,
   createRememberAbility,
   createSearchChannelPublicMemoriesAbility,
@@ -25,7 +26,7 @@ import {
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
-import { applyTrailingBracket, calculateTypingDelay, delay, splitSentences } from './core/split'
+import { applyTrailingBracket, calculateTypingDelay, splitSentences } from './core/split'
 import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
@@ -81,6 +82,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(createCrossPlatformRecallAbility(memory))
   abilityManager.register(createSearchMasterOmniscientMemoriesAbility(memory))
   abilityManager.register(createSearchChannelPublicMemoriesAbility(memory))
+  abilityManager.register(createDreamReflectionAbility(memory))
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(fileReadOrWriteAbility)
   abilityManager.register(silenceAbility)
@@ -111,7 +113,7 @@ export function main(ctx: Context, cfg: Config) {
   ctx.midware(async (next, session) => {
     if (session.channelId || session.guildId) return next()
 
-    const rawMessage = ((session as { messageAlt?: string }).messageAlt ?? session.message)?.trim()
+    const rawMessage = (session.messageAlt ?? session.message)?.trim()
     if (
       !rawMessage ||
       rawMessage.startsWith(
@@ -124,26 +126,32 @@ export function main(ctx: Context, cfg: Config) {
       for (const short of cmd.meta.shortcut) if (rawMessage.startsWith(short)) return next()
 
     const { adapter } = session.api
-    const { platform, identity, selfId: botSelfId } = adapter
-    const masterId = String((adapter.config as AdapterConfig).master ?? '')
+    const masterId = String((adapter.config as AdapterConfig).master)
     const userId = String(session.userId)
     const isOwner = Boolean(masterId) && userId === masterId
-    const senderName = session.sender.nickname
     const groupId = session.groupId ? String(session.groupId) : undefined
 
-    const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId, botSelfId, cfg.botName)
+    const decision = gateway.evaluate(
+      userId,
+      groupId,
+      rawMessage,
+      adapter.platform,
+      masterId,
+      adapter.selfId,
+      cfg.botName
+    )
     if (!decision.allow) {
-      // 白名单群日常未命中消息：仅作为潜水观察者悄悄记入滑动窗口，绝不调用大模型、不触发提炼
       if (
         groupId &&
         decision.reason !== 'platform_rejected' &&
-        (cfg.whitelistedGroups.includes(groupId) || cfg.whitelistedGroups.includes(`${platform}:${groupId}`))
-      ) {
-        const scope = groupScope(platform, groupId)
-        const scopeKey = formatScopeKey(scope)
-        const sanitizedMsg = sanitizeCqCodes(rawMessage)
-        memory.recordPassiveMessage(scopeKey, userId, sanitizedMsg, senderName ?? '')
-      }
+        (cfg.whitelistedGroups.includes(groupId) || cfg.whitelistedGroups.includes(`${adapter.platform}:${groupId}`))
+      )
+        memory.recordPassiveMessage(
+          formatScopeKey(groupScope(adapter.platform, groupId)),
+          userId,
+          sanitizeCqCodes(rawMessage),
+          session.sender.nickname
+        )
       return next()
     }
 
@@ -155,20 +163,12 @@ export function main(ctx: Context, cfg: Config) {
     }
 
     try {
-      // if (platform === 'onebot' && typeof (adapter as OnebotAdapter)?.call === 'function') {
-      //   const onebot = adapter as OnebotAdapter
-      //   if (groupId) onebot.call('group_poke', { group_id: Number(groupId), user_id: Number(userId) }).catch(() => {})
-      //   else onebot.call('friend_poke', { user_id: Number(userId) }).catch(() => {})
-      // }
-
-      const scope = groupId ? groupScope(platform, groupId) : privateScope(platform, userId)
-      const scopeKey = formatScopeKey(scope)
-      const profileKey = isOwner ? '__master__' : `${platform}:${userId}`
-
-      const abilityCtx = { userId, groupId, platform, identity, isOwner }
+      const scopeKey = formatScopeKey(
+        groupId ? groupScope(adapter.platform, groupId) : privateScope(adapter.platform, userId)
+      )
+      const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isOwner }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-      // 非主人群聊中，绝不注入主人的专属画像与记忆，防止群友对话串味认错人
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? profileKey : undefined))
+      extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? '__master__' : undefined))
 
       if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
         extraContexts.push(
@@ -178,10 +178,10 @@ export function main(ctx: Context, cfg: Config) {
       const systemPrompt = buildSystemPrompt(
         cfg,
         {
-          platform,
-          identity,
+          platform: adapter.platform,
+          identity: adapter.identity,
           masterId,
-          senderName,
+          senderName: session.sender.nickname,
           userId,
           groupId,
           isOwner,
@@ -198,10 +198,8 @@ export function main(ctx: Context, cfg: Config) {
       const now = new Date()
       const timeTag = `[${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}]`
       const currentInput = groupId
-        ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname ?? 'User'}] [UID: ${userId}] ${targetMessage}`
+        ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${targetMessage}`
         : `${timeTag} ${targetMessage}`
-
-      const isDirectCall = decision.reason === 'group_direct' || decision.reason === 'owner_direct'
 
       const reply = await geminiClient.chat(
         systemPrompt,
@@ -210,35 +208,42 @@ export function main(ctx: Context, cfg: Config) {
         abilityManager,
         abilityCtx,
         cfg.maxToolLoops,
-        isDirectCall
+        decision.reason === 'group_direct' || decision.reason === 'owner_direct'
       )
 
-      const chatDuration = Date.now() - startTime
       ctx.logger.info(
-        `Session round finished in <yellow>${chatDuration}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`
+        `Session round finished in <yellow>${Date.now() - startTime}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`
       )
 
       if (!reply || reply === '__NO_REPLY__') return
 
+      const cleanReply = reply.replace(/^\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{1,2}\]\s*/, '').trim()
+      if (!cleanReply) return
+
       if (groupId) gateway.recordBotSpeech(groupId)
 
       queueMicrotask(() => {
-        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender?.nickname ?? String(userId), isOwner)
+        memory.recordTurn(scopeKey, userId, targetMessage, cleanReply, session.sender.nickname, isOwner)
       })
 
-      const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
-      if (segments.length > 0) {
-        const lastIdx = segments.length - 1
-        segments[lastIdx] = applyTrailingBracket(
-          segments[lastIdx],
+      const segments = cfg.enableHumanDelay ? splitSentences(cleanReply, cfg.splitThreshold) : [cleanReply]
+      if (segments.length > 0)
+        segments[segments.length - 1] = applyTrailingBracket(
+          segments[segments.length - 1],
           cfg.trailingBracketRate,
           cfg.trailingBracketVariants
         )
-      }
+
       for (let i = 0; i < segments.length; i++) {
         const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
-        if (delayTime > 0) await delay(delayTime)
-        await session.quick(segments[i])
+        if (delayTime > 0) await sleep(delayTime)
+        await session.quick(
+          i === 0 && groupId && decision.needTargetUser
+            ? Math.random() > 0.5
+              ? Messages(Messages.mention(session.userId), segments[i])
+              : Messages(Messages.reply(session.messageId), segments[i])
+            : segments[i]
+        )
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)

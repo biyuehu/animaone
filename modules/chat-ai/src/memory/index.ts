@@ -43,10 +43,9 @@ export class HierarchicalMemoryService {
    * 绝对不增加总结计数、不触发任何大模型任务，0 Token 消耗。
    */
   public recordPassiveMessage(scopeKey: string, userId: string, content: string, senderName = ''): void {
-    const trimmed = content.trim()
-    if (!trimmed) return
-    this.slidingWindow.addMessage(scopeKey, 'user', trimmed, userId, senderName)
-    this.db.saveRecentMessage(scopeKey, 'user', trimmed, userId, senderName)
+    if (!content.trim()) return
+    this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName)
+    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName)
   }
 
   /**

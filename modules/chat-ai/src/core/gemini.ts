@@ -45,10 +45,22 @@ export class GeminiClient {
   ): Promise<string> {
     const isOwner = abilityCtx?.isOwner ?? false
     const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isOwner, excludeSilence) : []
-    const contents: Content[] = [
-      ...history.map((h) => ({ role: h.role, parts: [{ text: h.content }] })),
-      { role: 'user', parts: [{ text: newMessage }] }
-    ]
+
+    const mergedHistory: Content[] = []
+    for (const h of history) {
+      const last = mergedHistory[mergedHistory.length - 1]
+      if (last && last.role === h.role && last.parts) {
+        last.parts.push({ text: h.content })
+      } else {
+        mergedHistory.push({ role: h.role, parts: [{ text: h.content }] })
+      }
+    }
+
+    const lastMerged = mergedHistory[mergedHistory.length - 1]
+    const contents: Content[] =
+      lastMerged && lastMerged.role === 'user' && lastMerged.parts
+        ? [...mergedHistory.slice(0, -1), { role: 'user', parts: [...lastMerged.parts, { text: newMessage }] }]
+        : [...mergedHistory, { role: 'user', parts: [{ text: newMessage }] }]
 
     let loops = 0
     while (loops < maxLoops) {
@@ -101,23 +113,23 @@ export class GeminiClient {
       if (!functionCalls?.length || !abilityManager || !abilityCtx) {
         const candidate = response.candidates?.[0]
         const textParts = candidate?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
-        const combined = textParts
-          .map((p) => p.text)
-          .join('')
-          .trim()
-        const textResult = combined || (response.text?.trim() ?? '')
+        const textResult =
+          textParts
+            .map((p) => p.text)
+            .join('')
+            .trim() ||
+          (response.text?.trim() ?? '')
         if (!textResult) {
-          const promptFeedback = (response as { promptFeedback?: { blockReason?: string } }).promptFeedback
           const rawData = {
             candidates: response.candidates,
-            promptFeedback,
+            promptFeedback: response.promptFeedback,
             usageMetadata: response.usageMetadata
           }
           this.logger?.warn(
             `Loop <yellow>${loops}</yellow>: Model returned 0 text chars (<yellow>${loopDuration}ms</yellow>, data: <red>${JSON.stringify(rawData)}</red>)`
           )
 
-          if (promptFeedback?.blockReason === 'PROHIBITED_CONTENT') {
+          if (response.promptFeedback?.blockReason === 'PROHIBITED_CONTENT') {
             this.logger?.error(
               `PROHIBITED_CONTENT triggered! Dumping request contents:\n` +
                 `--- [System Prompt] ---\n${systemPrompt}\n` +

@@ -65,8 +65,6 @@ export function splitSentences(text: string, threshold: number, minLength = 12, 
   }, [] as string[])
 }
 
-export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
 /**
  * 随机末尾半括号修饰器：
  * 在日常短句回复后随机添加末尾括号（如 "好呀（", "笑死（（", "行吧）"），模拟真实网民心理语气。

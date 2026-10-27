@@ -56,8 +56,8 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       const summaryMatch = text.match(/\[SUMMARY\]\s*(.*)/)
       const tagsMatch = text.match(/\[TAGS\]\s*(.*)/)
 
-      if (summaryMatch)
-        this.db.addNode({
+      if (summaryMatch) {
+        const nodeId = this.db.addNode({
           level: 'day',
           scopeKey,
           summary: summaryMatch[1].trim(),
@@ -66,6 +66,21 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
           endTime,
           createdAt: Date.now()
         })
+
+        // 概念共现拓扑建边：如果存在标签，与共享标签的历史事件节点两两相连
+        if (nodeId && tagsMatch) {
+          const tags = tagsMatch[1]
+            .split(/[,，;； ]+/)
+            .map((t) => t.trim())
+            .filter(Boolean)
+          for (const tag of tags) {
+            const relatedNodes = this.db.searchMemoryNodes(scopeKey, tag, 3)
+            for (const related of relatedNodes) {
+              if (related.id && related.id !== nodeId) this.db.linkNodes(nodeId, related.id, tag)
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error('[MemorySummarizer] Compaction failed:', err instanceof Error ? err.message : err)
     }

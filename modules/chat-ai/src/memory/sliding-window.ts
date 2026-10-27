@@ -32,13 +32,12 @@ export class SlidingWindowMemory {
   constructor(private readonly maxTurns: number) {}
 
   public addMessage(scopeKey: string, role: 'user' | 'model', content: string, userId = '', senderName = ''): void {
-    const cleaned = content.trim()
-    if (!cleaned) return
+    if (!content.trim()) return
 
     const list = this.history.get(scopeKey) ?? []
     if (!this.history.has(scopeKey)) this.history.set(scopeKey, list)
 
-    list.push(role === 'model' ? modelMessage(cleaned) : userMessage(cleaned, userId, senderName))
+    list.push(role === 'model' ? modelMessage(content.trim()) : userMessage(content.trim(), userId, senderName))
     if (list.length > this.maxTurns) list.splice(0, list.length - this.maxTurns)
   }
 
