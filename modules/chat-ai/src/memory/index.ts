@@ -1,3 +1,4 @@
+import type { Logger } from 'kotori-bot'
 import type { GeminiClient } from '../core/gemini'
 import { formatAndTruncateMemory } from './context'
 import { parseScopeKey } from './scope'
@@ -13,6 +14,7 @@ export class HierarchicalMemoryService {
   private readonly db: MemoryDatabase
   private readonly slidingWindow: SlidingWindowMemory
   private readonly summarizer: MemorySummarizer | null = null
+  private readonly logger?: Logger
   private readonly uncommittedChatCount: Map<string, number> = new Map()
   private readonly activeChatBuffer: Map<string, { role: 'user' | 'model'; content: string; timestamp: number }[]> =
     new Map()
@@ -34,7 +36,8 @@ export class HierarchicalMemoryService {
     activeMemoryCapacity: number,
     summarizerConfig: SummarizerConfig,
     idleCompactTimeout: number,
-    enableDreamReflection = true
+    enableDreamReflection: boolean,
+    logger?: Logger
   ) {
     this.maxTurns = maxTurns
     this.summaryInterval = summaryInterval
@@ -44,7 +47,8 @@ export class HierarchicalMemoryService {
     this.enableDreamReflection = enableDreamReflection
     this.db = new MemoryDatabase(dbPath)
     this.slidingWindow = new SlidingWindowMemory(maxTurns)
-    this.summarizer = new MemorySummarizer(geminiClient, this.db, summarizerConfig)
+    this.logger = logger?.label('HierarchicalMemory')
+    this.summarizer = new MemorySummarizer(geminiClient, this.db, summarizerConfig, logger)
   }
 
   /**
@@ -56,8 +60,8 @@ export class HierarchicalMemoryService {
     scopeKey: string,
     userId: string,
     content: string,
-    senderName = '',
-    messageId = ''
+    senderName?: string,
+    messageId?: string
   ): void {
     if (!content.trim()) return
     this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
@@ -76,9 +80,9 @@ export class HierarchicalMemoryService {
     userId: string,
     userMsg: string,
     modelMsg: string,
-    senderName = '',
-    isOwner = false,
-    messageId = ''
+    senderName?: string,
+    isMaster?: boolean,
+    messageId?: string
   ): void {
     this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
@@ -104,19 +108,29 @@ export class HierarchicalMemoryService {
       this.uncommittedChatCount.set(scopeKey, 0)
       const bufferToCompact = [...chatList]
       chatList.length = 0
+      this.logger?.info(
+        `Compacting active chat history for <blue>${scopeKey}</blue> (${bufferToCompact.length} messages)`
+      )
       this.summarizer
         .compactChatHistory(scopeKey, bufferToCompact, bufferToCompact[0]?.timestamp ?? now, now)
-        .catch(() => {})
+        .catch((err) => {
+          this.logger?.error(
+            `Failed to compact chat history for ${scopeKey}: ${err instanceof Error ? err.message : String(err)}`
+          )
+        })
     }
 
-    if (isOwner && this.summarizer) {
+    if (isMaster && this.summarizer) {
       if (userMsg.trim().length >= 3 && !/^(\[图片[^\]]*\]|\[表情[^\]]*\]|[0-9]+)$/.test(userMsg.trim()))
         this.masterSpeechBuffer.push(userMsg.trim())
 
       if (this.masterSpeechBuffer.length >= this.summaryInterval) {
         const speechToExtract = [...this.masterSpeechBuffer]
         this.masterSpeechBuffer.length = 0
-        this.summarizer.extractUserProfile('__master__', speechToExtract, scopeKey).catch(() => {})
+        this.logger?.info(`Extracting master profile facts (${speechToExtract.length} messages)`)
+        this.summarizer.extractUserProfile('__master__', speechToExtract, scopeKey).catch((err) => {
+          this.logger?.error(`Failed to extract master profile: ${err instanceof Error ? err.message : String(err)}`)
+        })
       }
     }
   }
@@ -128,8 +142,8 @@ export class HierarchicalMemoryService {
     return this.slidingWindow.findMessageByMessageId(scopeKey, messageId)
   }
 
-  public async triggerDream(ownerId: string): Promise<string | null> {
-    const spoken = this.summarizer ? await this.summarizer.dreamReflection(ownerId) : null
+  public async triggerDream(masterId: string): Promise<string | null> {
+    const spoken = this.summarizer ? await this.summarizer.dreamReflection(masterId) : null
     if (spoken) this.pendingDreamSpoken = spoken
     return spoken
   }
@@ -140,7 +154,7 @@ export class HierarchicalMemoryService {
     return dream
   }
 
-  public async tickHeartbeat(ownerId?: string): Promise<void> {
+  public async tickHeartbeat(masterId?: string): Promise<void> {
     if (!this.summarizer) return
     const now = Date.now()
 
@@ -150,21 +164,31 @@ export class HierarchicalMemoryService {
         this.uncommittedChatCount.set(scopeKey, 0)
         const bufferToCompact = [...chatList]
         chatList.length = 0
+        this.logger?.info(`Idle timeout reached, compacting chat history for <blue>${scopeKey}</blue>`)
         await this.summarizer
           .compactChatHistory(scopeKey, bufferToCompact, bufferToCompact[0]?.timestamp ?? now, now)
-          .catch(() => {})
+          .catch((err) => {
+            this.logger?.error(
+              `Failed to idle-compact chat for ${scopeKey}: ${err instanceof Error ? err.message : String(err)}`
+            )
+          })
       }
     }
 
     if (this.masterSpeechBuffer.length > 0) {
       const speechToExtract = [...this.masterSpeechBuffer]
       this.masterSpeechBuffer.length = 0
-      await this.summarizer.extractUserProfile('__master__', speechToExtract).catch(() => {})
+      this.logger?.info(`Heartbeat flushing master speech buffer (${speechToExtract.length} messages)`)
+      await this.summarizer.extractUserProfile('__master__', speechToExtract).catch((err) => {
+        this.logger?.error(`Failed to flush master profile: ${err instanceof Error ? err.message : String(err)}`)
+      })
     }
 
     const hour = new Date(now).getHours()
-    if (this.enableDreamReflection && ownerId && hour >= 2 && hour < 5 && Math.random() < 0.3)
-      await this.triggerDream(ownerId).catch(() => {})
+    if (this.enableDreamReflection && masterId && hour >= 2 && hour < 5 && Math.random() < 0.3)
+      await this.triggerDream(masterId).catch((err) => {
+        this.logger?.error(`Failed to trigger dream reflection: ${err instanceof Error ? err.message : String(err)}`)
+      })
   }
 
   public getDatabase(): MemoryDatabase {
@@ -190,7 +214,7 @@ export class HierarchicalMemoryService {
       if (m.role === 'model') return { role: 'model', content: `${timeTag} ${m.content}` }
       const userPrefix =
         isGroup && m.userId
-          ? `${masterId && String(m.userId) === String(masterId) ? `[OWNER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[GUEST: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
+          ? `${masterId && String(m.userId) === String(masterId) ? `[MASTER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[GUEST: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
           : ''
       return {
         role: 'user',
@@ -199,7 +223,7 @@ export class HierarchicalMemoryService {
     })
   }
 
-  public assemblePromptContext(_scopeKey: string, userId = ''): string[] {
+  public assemblePromptContext(_scopeKey: string, userId?: string): string[] {
     const { profileBlock } = formatAndTruncateMemory(
       [],
       userId ? this.db.getProfileFactRecords(userId, this.activeMemoryCapacity) : []

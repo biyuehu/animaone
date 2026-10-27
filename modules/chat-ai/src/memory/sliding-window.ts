@@ -75,7 +75,7 @@ export class SlidingWindowMemory {
         return {
           role: msg.role,
           content: msg.content,
-          senderName: msg.role === 'user' ? msg.senderName : 'λ',
+          senderName: msg.role === 'user' ? msg.senderName : 'model',
           userId: msg.role === 'user' ? msg.userId : ''
         }
     }

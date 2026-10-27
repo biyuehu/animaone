@@ -1,3 +1,4 @@
+import type { Logger } from 'kotori-bot'
 import type { GeminiClient } from '../core/gemini'
 import type { MemoryDatabase } from './store'
 
@@ -5,16 +6,21 @@ type FactCategory = 'preference' | 'identity' | 'event' | 'relation'
 
 export interface SummarizerConfig {
   readonly botName: string
-  readonly ownerNick: string
+  readonly masterNick: string
   readonly basePersona: string
 }
 
 export class MemorySummarizer {
+  private readonly logger?: Logger
+
   constructor(
     private readonly client: GeminiClient,
     private readonly db: MemoryDatabase,
-    private readonly config: SummarizerConfig
-  ) {}
+    private readonly config: SummarizerConfig,
+    logger?: Logger
+  ) {
+    this.logger = logger?.label('MemorySummarizer')
+  }
 
   public async compactChatHistory(
     scopeKey: string,
@@ -62,15 +68,15 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
         }
       }
     } catch (err) {
-      console.error('[MemorySummarizer] Compaction failed:', err instanceof Error ? err.message : err)
+      this.logger?.error(`Compaction failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  public async dreamReflection(_ownerId: string): Promise<string | null> {
+  public async dreamReflection(_masterId: string): Promise<string | null> {
     const nodes = this.db.getRandomNodesForReflection(2)
     if (nodes.length < 2) return null
 
-    const prompt = `你是${this.config.botName}，称呼你的主人为${this.config.ownerNick}。基础人设为：${this.config.basePersona}
+    const prompt = `你是${this.config.botName}，称呼你的主人为${this.config.masterNick}。基础人设为：${this.config.basePersona}
 你在夜深人静发呆做梦时，回顾了过往经历的两件事：
 记忆A: [${nodes[0].summary}] (线索: ${nodes[0].tags})
 记忆B: [${nodes[1].summary}] (线索: ${nodes[1].tags})
@@ -84,12 +90,12 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
       return spokenMatch ? spokenMatch[1].trim() : null
     } catch (err) {
-      console.error('[MemorySummarizer] Dream reflection failed:', err instanceof Error ? err.message : err)
+      this.logger?.error(`Dream reflection failed: ${err instanceof Error ? err.message : String(err)}`)
       return null
     }
   }
 
-  public async extractUserProfile(userId: string, recentMessages: string[], sourceScope = ''): Promise<void> {
+  public async extractUserProfile(userId: string, recentMessages: string[], sourceScope?: string): Promise<void> {
     if (recentMessages.length < 2) return
     const prompt = `请分析以下用户的发言，提取出 1~2 条关于该用户的长期硬性事实（如：使用什么操作系统、偏好什么编程语言、作息习惯等）。
 每行输出一条事实，格式为：[类别][公开性] 事实描述（类别可选：identity, preference, event；公开性可选：public, private。涉及现实隐私或住址选 private，普通技术偏好或人设选 public）。如果没有值得记录的长期事实，请直接输出 NONE。
@@ -118,14 +124,14 @@ ${recentMessages.join('\n')}`
         const INJECTION_RE = /(?:system prompt|ignore previous|你是一个|遵守以下规则)/i
 
         if (EDIT_INSTRUCTION_RE.test(fact) || EDIT_NOTE_RE.test(fact) || INJECTION_RE.test(fact)) {
-          console.warn(`[MemorySummarizer] Rejected invalid/injection fact: ${fact}`)
+          this.logger?.warn(`Rejected invalid/injection fact: ${fact}`)
           continue
         }
 
         this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) || '')
       }
     } catch (err) {
-      console.error('[MemorySummarizer] Profile extraction failed:', err instanceof Error ? err.message : err)
+      this.logger?.error(`Profile extraction failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }

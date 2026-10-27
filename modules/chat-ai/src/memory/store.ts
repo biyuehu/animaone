@@ -220,7 +220,7 @@ export class MemoryDatabase {
     return combined
   }
 
-  public getRandomNodesForReflection(limit = 2): MemoryNode[] {
+  public getRandomNodesForReflection(limit: number): MemoryNode[] {
     return this.db
       .prepare(
         'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ORDER BY RANDOM() LIMIT ?'
@@ -231,10 +231,10 @@ export class MemoryDatabase {
   public upsertFact(
     userId: string,
     fact: string,
-    category: 'preference' | 'identity' | 'event' | 'relation' = 'preference',
-    visibility: 'public' | 'private' = 'private',
-    sourceScope = '',
-    sourceContext = ''
+    category: 'preference' | 'identity' | 'event' | 'relation',
+    visibility: 'public' | 'private',
+    sourceScope?: string,
+    sourceContext?: string
   ): void {
     const exists = this.db.prepare('SELECT id FROM user_profiles WHERE user_id = ? AND fact = ?').get(userId, fact)
     if (exists) {
@@ -242,17 +242,17 @@ export class MemoryDatabase {
         .prepare(
           'UPDATE user_profiles SET weight = weight + 1, visibility = ?, source_scope = ?, source_context = ?, updated_at = ? WHERE user_id = ? AND fact = ?'
         )
-        .run(visibility, sourceScope, sourceContext, Date.now(), userId, fact)
+        .run(visibility, sourceScope ?? '', sourceContext ?? '', Date.now(), userId, fact)
     } else {
       this.db
         .prepare(
           'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, source_context, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
         )
-        .run(userId, fact, category, visibility, sourceScope, sourceContext, Date.now())
+        .run(userId, fact, category, visibility, sourceScope ?? '', sourceContext ?? '', Date.now())
     }
   }
 
-  public getAllRecentNodes(limit = 10, platformFilter?: string): MemoryNode[] {
+  public getAllRecentNodes(limit: number, platformFilter?: string): MemoryNode[] {
     if (platformFilter) {
       return this.db
         .prepare(
@@ -479,7 +479,7 @@ export class MemoryDatabase {
   /**
    * 基于 BM25 检索语义相关的二级记忆节点
    */
-  public searchMemoryNodes(scopeKey: string, query: string, limit = 5): MemoryNode[] {
+  public searchMemoryNodes(scopeKey: string, query: string, limit: number): MemoryNode[] {
     const rows = this.db
       .prepare(
         'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key = ? ORDER BY end_time DESC LIMIT 100'
@@ -500,7 +500,7 @@ export class MemoryDatabase {
   /**
    * 图谱 BFS 有界遍历（Graph RAG）：从起点节点向外扩展，获取连通记忆并提取发散线索词
    */
-  public traverseGraph(startNodeIds: number[], maxDepth = 2, maxNodes = 10): GraphTraversalResult {
+  public traverseGraph(startNodeIds: number[], maxDepth: number, maxNodes: number): GraphTraversalResult {
     if (startNodeIds.length === 0) return { nodes: [], cluesToExplore: [] }
 
     const visitedIds = new Set<number>(startNodeIds)
