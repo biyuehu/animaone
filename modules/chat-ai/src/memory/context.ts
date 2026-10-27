@@ -9,7 +9,7 @@ export function formatAndTruncateMemory(
   profileFacts: readonly ProfileFactRecord[],
   config: BudgetConfig = {}
 ): { memoryBlock: string; profileBlock: string } {
-  const maxChars = config.maxChars || 4000
+  const maxChars = config.maxChars ?? 4000
 
   const profileBlock =
     profileFacts.length > 0
@@ -23,12 +23,9 @@ export function formatAndTruncateMemory(
   )
 
   let memoryBlock = memoryLines.length > 0 ? `[LONG_TERM_MEMORY_SUMMARIES]\n${memoryLines.join('\n')}` : ''
-
-  let totalLength = profileBlock.length + memoryBlock.length
-  while (memoryLines.length > 2 && totalLength > maxChars) {
+  while (memoryLines.length > 2 && profileBlock.length + memoryBlock.length > maxChars) {
     memoryLines.pop()
     memoryBlock = `[LONG_TERM_MEMORY_SUMMARIES]\n${memoryLines.join('\n')}`
-    totalLength = profileBlock.length + memoryBlock.length
   }
 
   return { memoryBlock, profileBlock }

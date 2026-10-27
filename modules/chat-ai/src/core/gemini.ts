@@ -1,5 +1,5 @@
 import type { Content, GenerateContentResponse, Part } from '@google/genai'
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, HarmBlockThreshold, HarmCategory } from '@google/genai'
 import type { Context } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { AbilityContext, AbilityManager } from '../ability'
@@ -40,10 +40,11 @@ export class GeminiClient {
     newMessage: string,
     abilityManager?: AbilityManager,
     abilityCtx?: AbilityContext,
-    maxLoops = 5
+    maxLoops = 5,
+    excludeSilence = false
   ): Promise<string> {
     const isOwner = abilityCtx?.isOwner ?? false
-    const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isOwner) : []
+    const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isOwner, excludeSilence) : []
     const contents: Content[] = [
       ...history.map((h) => ({ role: h.role, parts: [{ text: h.content }] })),
       { role: 'user', parts: [{ text: newMessage }] }
@@ -68,11 +69,11 @@ export class GeminiClient {
               systemInstruction: systemPrompt,
               temperature: 0.7,
               safetySettings: [
-                { category: 'HARM_CATEGORY_HARASSMENT' as any, threshold: 'BLOCK_NONE' as any },
-                { category: 'HARM_CATEGORY_HATE_SPEECH' as any, threshold: 'BLOCK_NONE' as any },
-                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as any, threshold: 'BLOCK_NONE' as any },
-                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as any, threshold: 'BLOCK_NONE' as any },
-                { category: 'HARM_CATEGORY_CIVIC_INTEGRITY' as any, threshold: 'BLOCK_NONE' as any }
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
               ],
               ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {})
             }

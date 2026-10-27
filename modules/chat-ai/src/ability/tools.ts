@@ -32,7 +32,6 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
       execute: async (args: { url?: string; query?: string }) => {
         const agent = proxy ? new ProxyAgent(proxy.startsWith('http') ? proxy : `http://${proxy}`) : undefined
 
-        // 1. 如果指定了 URL，直接抓取页面内容
         if (args.url)
           try {
             const resp = await undiciFetch(args.url, {
@@ -41,7 +40,6 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
               signal: AbortSignal.timeout(8000)
             })
             const html = await resp.text()
-            // 简单剔除 script、style 与 html 标签，提取干净的正文前 2000 字
             const cleanText = html
               .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
               .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
@@ -198,70 +196,79 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
 }
 
 /**
- * 深度回溯历史记忆与对话（翻旧账能力）：
- * 当对方反复追问“之前我们聊了什么”、“更早之前说了啥”、或询问某个特定旧话题时使用
+ * 主人全知记忆溯源（仅主人可用）：
+ * 允许跨平台、跨群聊、跨私聊全局穿透，检索历史原话、事件总结以及深层沉淀的主人历史画像
  */
-export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryService): Ability {
+export function createSearchMasterOmniscientMemoriesAbility(memory: HierarchicalMemoryService): Ability {
   return {
-    name: 'search_past_memories',
+    name: 'search_master_omniscient_memories',
     description:
-      '深入翻阅数据库中更久远的历史原话与概念记忆图谱。支持基于 BM25 算法检索并沿关联网络发散，返回相关记忆与延伸探索线索（cluesToExplore）',
+      '仅主人可用。跨平台、跨所有群聊与私聊进行全知记忆检索。支持查阅过往原话、客观事件节点以及主人自身沉淀的历史画像与偏好设定。',
     toolDefinition: {
-      ownerOnly: false,
+      ownerOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
-          keyword: {
+          query: {
             type: 'STRING',
-            description: '检索关键词或探索概念，支持中文语义分词与图遍历联想'
+            description: '检索关键词或自然语言描述（如：大学、某次提到的电脑配置等）'
           },
-          offset: {
-            type: 'INTEGER',
-            description: '偏移量。如果需要回溯更早更深的历史，可以传入 10、20 等逐步深入'
+          targetPlatform: {
+            type: 'STRING',
+            description: '可选限定平台（如 onebot），不传则搜索全部平台'
           },
           limit: {
             type: 'INTEGER',
-            description: '期望调取的条数，建议 5~10'
+            description: '返回结果数量上限，默认 5'
           }
-        }
+        },
+        required: ['query']
       },
-      execute: async (args: { keyword?: string; offset?: number; limit?: number }, ctx?: AbilityContext) => {
-        const scopeKey = ctx ? `${ctx.platform}:${ctx.groupId ? `group:${ctx.groupId}` : `private:${ctx.userId}`}` : ''
-        if (!scopeKey) return { error: '无法获取当前会话上下文' }
+      execute: async (args: { query: string; targetPlatform?: string; limit?: number }) => {
+        const limit = args.limit ?? 5
+        const db = memory.getDatabase()
 
-        const messages = memory.getDatabase().searchDeepHistory(scopeKey, {
-          keyword: args.keyword,
-          offset: args.offset ?? 0,
-          limit: args.limit ?? 8
-        })
+        // 1. 深度检索主人的历史全量画像（使用 refer2 分词重叠度 + 权重时序打分，不过滤 private）
+        const matchedProfiles = db.searchProfileFacts('__master__', args.query, limit)
 
-        if (args.keyword) {
-          const seedNodes = memory.getDatabase().searchMemoryNodes(scopeKey, args.keyword, 4)
-          const startIds = seedNodes.map((n) => n.id).filter((id): id is number => id !== undefined)
-          const graphResult = memory.getDatabase().traverseGraph(startIds, 2, 6)
-          const combinedNodes = graphResult.nodes.length > 0 ? graphResult.nodes : seedNodes
+        // 2. 跨平台/跨群检索近期相关原话
+        const allRecent = db.getGlobalRecentMessages(50, args.targetPlatform)
+        const queryLower = args.query.toLowerCase()
+        const matchedDialogues = allRecent
+          .filter((msg) => msg.content.toLowerCase().includes(queryLower))
+          .slice(0, limit)
 
-          return {
-            recalledMessages: messages,
-            relatedMemories: combinedNodes.map((n) => ({
-              time: new Date(n.startTime).toLocaleDateString('zh-CN'),
-              level: n.level,
-              summary: n.summary,
-              tags: n.tags
-            })),
-            cluesToExplore: graphResult.cluesToExplore
-          }
-        }
+        // 3. 全局检索事件总结节点并顺带沿 memory_links 遍历拓扑邻居
+        const eventNodes = db.searchMemoryNodes('', args.query, limit)
+        const startNodeIds = eventNodes.map((n) => n.id).filter((id): id is number => typeof id === 'number')
+        const graphTraversal = db.traverseGraph(startNodeIds, 1, limit)
 
-        const nodes = memory.getDatabase().getPyramidMemories(scopeKey, 5)
         return {
-          recalledMessages: messages,
-          relatedMemories: nodes.map((n) => ({
-            time: new Date(n.startTime).toLocaleDateString('zh-CN'),
-            level: n.level,
-            summary: n.summary
+          masterProfileFacts: matchedProfiles.map((p) => ({
+            id: p.id,
+            fact: p.fact,
+            category: p.category,
+            visibility: p.visibility,
+            lastUpdated: new Date(p.updatedAt).toLocaleDateString('zh-CN')
           })),
-          cluesToExplore: []
+          dialogueHistory: matchedDialogues.map((d) => ({
+            scope: d.scope,
+            sender: `${d.senderName || '用户'}(${d.userId})`,
+            role: d.role,
+            content: d.content,
+            time: d.time
+          })),
+          eventSummaries: eventNodes.map((n) => ({
+            level: n.level,
+            summary: n.summary,
+            time: new Date(n.startTime).toLocaleDateString('zh-CN'),
+            tags: n.tags
+          })),
+          associatedClues: graphTraversal.cluesToExplore,
+          associatedContextNodes: graphTraversal.nodes.map((n) => ({
+            summary: n.summary,
+            tags: n.tags
+          }))
         }
       }
     }
@@ -269,26 +276,72 @@ export function createSearchPastMemoriesAbility(memory: HierarchicalMemoryServic
 }
 
 /**
- * 获取主人公开认知（群友可用，只返回允许公开吹嘘的非隐私特征）
+ * 频道公开记忆检索（群友与公开可用）：
+ * 严格限制在当前群聊/当前私聊作用域内，仅允许检索本群事件原话与打了 public 标签的主人公开设定
  */
-export function createPublicMasterRecallAbility(memory: HierarchicalMemoryService): Ability {
+export function createSearchChannelPublicMemoriesAbility(memory: HierarchicalMemoryService): Ability {
   return {
-    name: 'recall_master_public_profile',
-    description: '当群友主动打听或问及大哥哥（主人）的特征、喜好或公开身份时调用，仅返回允许对外公开的非私密信息',
+    name: 'search_channel_public_memories',
+    description:
+      '翻阅当前群聊内发生过的公开历史对话与事件总结，也可检索关于大哥哥（主人）允许公开的对外人设。严格受本群作用域与隐私限制。',
     toolDefinition: {
       ownerOnly: false,
       parameters: {
         type: 'OBJECT',
         properties: {
-          limit: { type: 'INTEGER', description: '获取的条数，默认 5' }
-        }
+          query: {
+            type: 'STRING',
+            description: '检索关键词或探索概念'
+          },
+          offset: {
+            type: 'INTEGER',
+            description: '偏移量，用于深入翻页'
+          },
+          limit: {
+            type: 'INTEGER',
+            description: '期望调取的条数，默认 5'
+          }
+        },
+        required: ['query']
       },
-      execute: async (args: { limit?: number }) => {
-        const records = memory.getDatabase().getProfileFactRecords('__master__', args.limit ?? 5, 'public')
+      execute: async (args: { query: string; offset?: number; limit?: number }, ctx?: AbilityContext) => {
+        const scopeKey = ctx ? `${ctx.platform}:${ctx.groupId ? `group:${ctx.groupId}` : `private:${ctx.userId}`}` : ''
+        if (!scopeKey) return { error: '无法获取当前会话上下文' }
+
+        const limit = args.limit ?? 5
+        const db = memory.getDatabase()
+
+        // 1. 严格限定在当前 scopeKey 下检索聊天原话
+        const messages = db.searchDeepHistory(scopeKey, {
+          keyword: args.query,
+          offset: args.offset ?? 0,
+          limit
+        })
+
+        // 2. 严格限定在当前 scopeKey 下检索事件总结与图谱
+        const seedNodes = db.searchMemoryNodes(scopeKey, args.query, 3)
+        const startIds = seedNodes.map((n) => n.id).filter((id): id is number => id !== undefined)
+        const graphResult = db.traverseGraph(startIds, 2, 4)
+        const combinedNodes = graphResult.nodes.length > 0 ? graphResult.nodes : seedNodes
+
+        // 3. 仅允许检索打了 public 的公开主人人设（严格卡死 visibility = 'public'，且只返回对外偏好与身份）
+        const publicProfiles = db
+          .searchProfileFacts('__master__', args.query, 3, 'public')
+          .filter((p) => p.category === 'identity' || p.category === 'preference')
+
         return {
-          publicFacts: records.map(
-            (r) => `[ID: ${r.id}] [${new Date(r.updatedAt).toLocaleDateString('zh-CN')}] ${r.fact}`
-          )
+          currentChannelDialogues: messages,
+          currentChannelEvents: combinedNodes.map((n) => ({
+            time: new Date(n.startTime).toLocaleDateString('zh-CN'),
+            level: n.level,
+            summary: n.summary,
+            tags: n.tags
+          })),
+          masterPublicPersona: publicProfiles.map((p) => ({
+            fact: p.fact,
+            category: p.category
+          })),
+          cluesToExplore: graphResult.cluesToExplore
         }
       }
     }
@@ -362,7 +415,7 @@ export const fileReadOrWriteAbility: Ability = {
 export const silenceAbility: Ability = {
   name: 'choose_silence',
   description:
-    '在群聊日常观察中，或者当你觉得不需要回复、不想搭理对方、觉得没必要插嘴时调用此工具。调用后你将保持沉默，不向聊天中发送任何消息。',
+    '仅在无明确指名或偶发围观群聊时，如果你觉得群内话题与你无关、无需插嘴时调用此工具保持静默。注意：当有人明确艾特你、引用你的话或直接对你发起提问时，请正常友好作答，严禁随意滥用此工具已读不回。',
   toolDefinition: {
     ownerOnly: false,
     parameters: {

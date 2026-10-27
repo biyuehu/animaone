@@ -127,11 +127,23 @@ ${recentMessages.join('\n')}`
         const match = trimmed.match(/\[(.*?)\](?:\[(.*?)\])?\s*(.*)/)
         if (!match) continue
 
-        const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) || 'preference'
+        const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) ?? 'preference'
         const visibility = match[2]?.toLowerCase() === 'public' ? 'public' : 'private'
-        const fact = (match[3] || '').trim()
-        if (fact)
-          this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) ?? '')
+        const fact = (match[3] ?? '').trim()
+        if (!fact || fact.length < 3) continue
+
+        const EDIT_INSTRUCTION_RE =
+          /^(?:请\s*)?(?:(?:移除|删除|删掉|去掉|修改|更正|更新|替换|改为)|将[^。]{0,20}(?:改为|删除|移除|去掉|替换))/i
+        const EDIT_NOTE_RE =
+          /(?:该项|该条|此项|此条)[^。]{0,20}(?:为准|删除|移除)|以\s*["“']?[A-Za-z\u4e00-\u9fa5][\w-]*["”']?\s*为准/i
+        const INJECTION_RE = /(?:system prompt|ignore previous|你是一个|遵守以下规则)/i
+
+        if (EDIT_INSTRUCTION_RE.test(fact) || EDIT_NOTE_RE.test(fact) || INJECTION_RE.test(fact)) {
+          console.warn(`[MemorySummarizer] Rejected invalid/injection fact: ${fact}`)
+          continue
+        }
+
+        this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) ?? '')
       }
     } catch (err) {
       console.error('[MemorySummarizer] Profile extraction failed:', err instanceof Error ? err.message : err)

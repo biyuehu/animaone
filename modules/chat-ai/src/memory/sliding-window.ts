@@ -31,7 +31,7 @@ export class SlidingWindowMemory {
 
   constructor(private readonly maxTurns: number) {}
 
-  addMessage(scopeKey: string, role: 'user' | 'model', content: string, userId = '', senderName = ''): void {
+  public addMessage(scopeKey: string, role: 'user' | 'model', content: string, userId = '', senderName = ''): void {
     const cleaned = content.trim()
     if (!cleaned) return
 
@@ -42,19 +42,19 @@ export class SlidingWindowMemory {
     if (list.length > this.maxTurns) list.splice(0, list.length - this.maxTurns)
   }
 
-  getContext(scopeKey: string): ChatMessage[] {
+  public getContext(scopeKey: string): ChatMessage[] {
     return this.history.get(scopeKey) ?? []
   }
 
-  has(scopeKey: string): boolean {
+  public has(scopeKey: string): boolean {
     return this.history.has(scopeKey)
   }
 
-  loadInitialMessages(scopeKey: string, messages: ChatMessage[]): void {
+  public loadInitialMessages(scopeKey: string, messages: ChatMessage[]): void {
     this.history.set(scopeKey, [...messages])
   }
 
-  clear(scopeKey: string): void {
+  public clear(scopeKey: string): void {
     this.history.delete(scopeKey)
   }
 }

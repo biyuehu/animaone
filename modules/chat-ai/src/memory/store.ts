@@ -272,9 +272,14 @@ export class MemoryDatabase {
     limit: number,
     visibilityFilter?: 'public' | 'private'
   ): ProfileFactRecord[] {
+    // 严格遵循 refer2 一级记忆（工作区）排序与容量控制原则：
+    // 一级记忆只看「评分 (weight)」与「创建/更新时间 (updated_at)」
+    // 优先级：高评分排在前面；评分相同时，最新发生/更新的排在前面；
+    // 超过 limit (activeMemoryCapacity) 的低分/陈旧事实自然被挤出工作区沉底。
     const query = visibilityFilter
-      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY updated_at ASC LIMIT ?'
-      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY updated_at ASC LIMIT ?'
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+
     return (visibilityFilter
       ? this.db.prepare(query).all(userId, visibilityFilter, limit)
       : this.db.prepare(query).all(userId, limit)) as unknown as ProfileFactRecord[]
@@ -282,6 +287,45 @@ export class MemoryDatabase {
 
   public getProfileFacts(userId: string, limit: number, visibilityFilter?: 'public' | 'private'): string[] {
     return this.getProfileFactRecords(userId, limit, visibilityFilter).map((r) => r.fact)
+  }
+
+  /**
+   * 严格借鉴 refer2 的分词重叠度 + 时序打分：深度检索 user_profiles 历史画像
+   */
+  public searchProfileFacts(
+    userId: string,
+    query: string,
+    limit = 5,
+    visibilityFilter?: 'public' | 'private'
+  ): ProfileFactRecord[] {
+    const baseQuery = visibilityFilter
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY updated_at DESC LIMIT 100'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100'
+
+    const rows = (visibilityFilter
+      ? this.db.prepare(baseQuery).all(userId, visibilityFilter)
+      : this.db.prepare(baseQuery).all(userId)) as unknown as ProfileFactRecord[]
+
+    if (rows.length === 0) return []
+
+    const queryTokens = [...new Intl.Segmenter('zh-CN', { granularity: 'word' }).segment(query)]
+      .filter((s) => s.isWordLike && s.segment.trim().length >= 1)
+      .map((s) => s.segment.toLowerCase())
+
+    if (queryTokens.length === 0) return rows.slice(0, limit)
+
+    return rows
+      .map((r) => {
+        const factLower = r.fact.toLowerCase()
+        const matchCount = queryTokens.reduce((count, token) => (factLower.includes(token) ? count + 1 : count), 0)
+        return matchCount === 0
+          ? null
+          : { record: r, score: matchCount * 100 + (r.weight ?? 1) * 10 + r.updatedAt / 1e12 }
+      })
+      .filter((item): item is { record: ProfileFactRecord; score: number } => item !== null)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((s) => s.record)
   }
 
   public saveRecentMessage(

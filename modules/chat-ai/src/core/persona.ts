@@ -25,29 +25,16 @@ export function buildSystemPrompt(
       .replaceAll('{identity}', runtime.identity)
       .replaceAll('{platform}', runtime.platform)
 
-  const parts: string[] = []
-
-  // 1. 基础人设
-  parts.push(`你叫${config.botName}`)
-  parts.push(
-    `对主人的默认基础称呼：${config.ownerNick}（注意：如果在下方【参考记忆与已知事实】中有主人最新要求或约定的具体称呼，必须优先遵从最新记忆事实）`
-  )
-  parts.push(replacePlaceholders(config.basePersona))
-
-  // 2. 平台分化偏好
-  const aspectBias = config.platformAspects[runtime.platform]
-  if (aspectBias) parts.push(replacePlaceholders(aspectBias))
-
-  // 3. 场景权限人设
   const isGroup = Boolean(runtime.groupId)
-  parts.push(
-    replacePlaceholders(runtime.isOwner ? (isGroup ? config.ownerGroup : config.ownerPrivate) : config.guestGroup)
-  )
-
-  // 4. 基础感知
   const ZONE = 'zh-CN'
   const now = new Date()
-  parts.push(
+
+  return [
+    `你叫${config.botName}`,
+    `对主人的默认基础称呼：${config.ownerNick}（注意：如果在下方【参考记忆与已知事实】中有主人最新要求或约定的具体称呼，必须优先遵从最新记忆事实）`,
+    replacePlaceholders(config.basePersona),
+    config.platformAspects[runtime.platform] ? replacePlaceholders(config.platformAspects[runtime.platform]) : null,
+    replacePlaceholders(runtime.isOwner ? (isGroup ? config.ownerGroup : config.ownerPrivate) : config.guestGroup),
     [
       '【基础感知】',
       `当前时间（${ZONE}）：${now.toLocaleString(ZONE, { hour12: false, timeZone: 'Asia/Shanghai' })}`,
@@ -56,19 +43,16 @@ export function buildSystemPrompt(
       `接入平台：${runtime.platform} (实例：${runtime.identity})`,
       `对话环境：${isGroup ? `公开群聊 (Group ID：${runtime.groupId})` : '私聊环境 (Private)'}`,
       `当前对话者身份：${runtime.isOwner ? 'MASTER' : 'GROUP_MEMBER'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
-    ].join('\n')
-  )
-
-  // 5. 记忆与核心事实（最高优先级，放在最后强化模型遵守）
-  if (extraContexts.length > 0) {
-    parts.push(
-      [
-        '【长期记忆与核心事实（最高优先级）】',
-        '以下是关于对话者的确凿事实与历史约定。你必须严格遵从这些事实，包括但不限于对方的喜好、约定称呼、重要经历等：',
-        ...extraContexts
-      ].join('\n')
-    )
-  }
-
-  return parts.join('\n\n').trim()
+    ].join('\n'),
+    extraContexts.length > 0
+      ? [
+          '【长期记忆与核心事实（最高优先级）】',
+          '以下是关于对话者的确凿事实与历史约定。你必须严格遵从这些事实，包括但不限于对方的喜好、约定称呼、重要经历等：',
+          ...extraContexts
+        ].join('\n')
+      : null
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
 }

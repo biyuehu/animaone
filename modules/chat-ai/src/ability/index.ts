@@ -45,11 +45,12 @@ export class AbilityManager {
     return list
   }
 
-  public getGeminiFunctionDeclarations(isOwner: boolean): Record<string, unknown>[] {
+  public getGeminiFunctionDeclarations(isOwner: boolean, excludeSilence = false): Record<string, unknown>[] {
     const declarations: Record<string, unknown>[] = []
     for (const ability of this.abilities.values()) {
       if (ability.toolDefinition) {
         if (ability.toolDefinition.ownerOnly && !isOwner) continue
+        if (excludeSilence && ability.name === 'choose_silence') continue
         declarations.push({
           name: ability.name,
           description: ability.description,

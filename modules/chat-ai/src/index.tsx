@@ -6,9 +6,9 @@ import { systemStatusAbility } from './ability/system'
 import {
   createCrossPlatformRecallAbility,
   createKotoriMessagingAbility,
-  createPublicMasterRecallAbility,
   createRememberAbility,
-  createSearchPastMemoriesAbility,
+  createSearchChannelPublicMemoriesAbility,
+  createSearchMasterOmniscientMemoriesAbility,
   createWebSearchOrFetchAbility,
   fileReadOrWriteAbility,
   silenceAbility,
@@ -26,7 +26,7 @@ import {
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
 import { applyTrailingBracket, calculateTypingDelay, delay, splitSentences } from './core/split'
-import { MessageGateway } from './gateway/filter'
+import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
 export const config = Tsu.Object({
@@ -34,6 +34,7 @@ export const config = Tsu.Object({
   modelName: Tsu.String().default('gemini-3.5-flash-lite'),
   proxy: Tsu.String().optional(),
   whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
+  allowedPlatforms: Tsu.Array(Tsu.String()).default(['cmd', 'onebot']),
   groupActiveRate: Tsu.Number().range(0, 1).default(0.05),
   botName: Tsu.String().default(DEFAULT_BOT_NAME),
   ownerNick: Tsu.String().default(DEFAULT_OWNER_NICK),
@@ -52,7 +53,7 @@ export const config = Tsu.Object({
   trailingBracketVariants: Tsu.Array(Tsu.String()).default(['（', '）', '（（', '（（（', '（）']),
   maxTurns: Tsu.Number().default(20),
   summaryInterval: Tsu.Number().default(10),
-  allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot']),
+  activeMemoryCapacity: Tsu.Number().default(15),
   maxToolLoops: Tsu.Number().default(10)
 })
 
@@ -71,14 +72,15 @@ export function main(ctx: Context, cfg: Config) {
     path.join(ctx.baseDir.data, 'memory.db'),
     cfg.maxTurns,
     cfg.summaryInterval,
+    cfg.activeMemoryCapacity,
     cfg.proxy
   )
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
   abilityManager.register(createCrossPlatformRecallAbility(memory))
-  abilityManager.register(createPublicMasterRecallAbility(memory))
-  abilityManager.register(createSearchPastMemoriesAbility(memory))
+  abilityManager.register(createSearchMasterOmniscientMemoriesAbility(memory))
+  abilityManager.register(createSearchChannelPublicMemoriesAbility(memory))
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(fileReadOrWriteAbility)
   abilityManager.register(silenceAbility)
@@ -90,6 +92,20 @@ export function main(ctx: Context, cfg: Config) {
     modelName: cfg.modelName,
     proxy: cfg.proxy,
     logger: ctx.logger
+  })
+
+  let isHeartbeatRunning = false
+  const heartbeatTask = ctx.task({ cron: '*/3 * * * *', timeZone: 'Asia/Shanghai', start: true }, async () => {
+    if (isHeartbeatRunning) return
+    isHeartbeatRunning = true
+    await memory.tickHeartbeat().catch((e) => {
+      ctx.logger.error(`Memory heartbeat failed: ${e instanceof Error ? e.message : String(e)}`)
+    })
+    isHeartbeatRunning = false
+  })
+
+  ctx.on('dispose', () => {
+    if (typeof heartbeatTask === 'function') (heartbeatTask as () => void)()
   })
 
   ctx.midware(async (next, session) => {
@@ -116,7 +132,20 @@ export function main(ctx: Context, cfg: Config) {
     const groupId = session.groupId ? String(session.groupId) : undefined
 
     const decision = gateway.evaluate(userId, groupId, rawMessage, platform, masterId, botSelfId, cfg.botName)
-    if (!decision.allow) return next()
+    if (!decision.allow) {
+      // 白名单群日常未命中消息：仅作为潜水观察者悄悄记入滑动窗口，绝不调用大模型、不触发提炼
+      if (
+        groupId &&
+        decision.reason !== 'platform_rejected' &&
+        (cfg.whitelistedGroups.includes(groupId) || cfg.whitelistedGroups.includes(`${platform}:${groupId}`))
+      ) {
+        const scope = groupScope(platform, groupId)
+        const scopeKey = formatScopeKey(scope)
+        const sanitizedMsg = sanitizeCqCodes(rawMessage)
+        memory.recordPassiveMessage(scopeKey, userId, sanitizedMsg, senderName ?? '')
+      }
+      return next()
+    }
 
     const targetMessage = decision.cleanedMessage ?? rawMessage
 
@@ -141,9 +170,9 @@ export function main(ctx: Context, cfg: Config) {
       // 非主人群聊中，绝不注入主人的专属画像与记忆，防止群友对话串味认错人
       extraContexts.push(...memory.assemblePromptContext(scopeKey, isOwner ? profileKey : undefined))
 
-      if (decision.reason === 'group_casual')
+      if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
         extraContexts.push(
-          '【群聊日常旁观提醒】你当前是路过偶尔围观群友聊天。如果你觉得他们的话题无聊或不想插嘴，请调用 choose_silence 工具保持静默；如果有想吐槽的，再做简短回应。'
+          '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默；如果对话很自然且有话想说，请正常简短回应。'
         )
 
       const systemPrompt = buildSystemPrompt(
@@ -172,13 +201,16 @@ export function main(ctx: Context, cfg: Config) {
         ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname ?? 'User'}] [UID: ${userId}] ${targetMessage}`
         : `${timeTag} ${targetMessage}`
 
+      const isDirectCall = decision.reason === 'group_direct' || decision.reason === 'owner_direct'
+
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
         currentInput,
         abilityManager,
         abilityCtx,
-        cfg.maxToolLoops
+        cfg.maxToolLoops,
+        isDirectCall
       )
 
       const chatDuration = Date.now() - startTime
@@ -188,8 +220,10 @@ export function main(ctx: Context, cfg: Config) {
 
       if (!reply || reply === '__NO_REPLY__') return
 
+      if (groupId) gateway.recordBotSpeech(groupId)
+
       queueMicrotask(() => {
-        memory.recordTurn(scopeKey, profileKey, targetMessage, reply, session.sender?.nickname ?? String(userId))
+        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender?.nickname ?? String(userId), isOwner)
       })
 
       const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]

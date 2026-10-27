@@ -4,12 +4,7 @@
  * - 普通短句聊天按标点符号（。！？!?…）分段并智能合并短句，确保自然呼吸感与分句体验。
  */
 export function splitSentences(text: string, threshold: number, minLength = 12, maxLength = 35): string[] {
-  // 达到或超过长文本阈值直接完整返回
-  if (threshold > 0 && text.trim().length >= threshold) {
-    return [text.replaceAll(/\n\n/g, '\n').trim()]
-  }
-
-  // 保持代码块、列表或长文本结构完整
+  if (threshold > 0 && text.trim().length >= threshold) return [text.replaceAll(/\n\n/g, '\n').trim()]
   if (
     text.includes('```') ||
     text.includes('import ') ||
@@ -27,16 +22,12 @@ export function splitSentences(text: string, threshold: number, minLength = 12, 
     .trim()
   if (!cleaned) return []
 
-  // 标点符号正则表达式
-  const PUNCTUATION_REGEX = /([。！？!?…\n]+)/g
-  const rawSegments = cleaned.split(PUNCTUATION_REGEX)
+  const rawSegments = cleaned.split(/([。！？!?…\n]+)/g)
   const initialSentences: string[] = []
-
-  // 合并标点符号到前一个句子
   for (let i = 0; i < rawSegments.length; i += 2) {
-    const sentence = rawSegments[i]?.trim() ?? ''
-    const punctuation = rawSegments[i + 1]?.trim() ?? ''
-    if (sentence) initialSentences.push(sentence + punctuation)
+    const s = rawSegments[i]?.trim() ?? ''
+    const p = rawSegments[i + 1]?.trim() ?? ''
+    if (s) initialSentences.push(s + p)
   }
 
   if (initialSentences.length === 0) return [cleaned]
@@ -82,26 +73,17 @@ export const delay = (ms: number): Promise<void> => new Promise((resolve) => set
  * 技术场景（包含代码、Markdown 列表）或已有结尾标点时自动规避。
  */
 export function applyTrailingBracket(text: string, rate: number, variants: string[]): string {
-  if (rate <= 0 || variants.length === 0) return text
-  // 排除代码块或结构化列表
-  if (text.includes('```') || /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text)) return text
-  if (Math.random() >= rate) return text
-
-  const chosen = variants[Math.floor(Math.random() * variants.length)]
-  const trimmed = text.trimEnd()
-  return `${trimmed}${chosen}`
+  if (
+    rate <= 0 ||
+    variants.length === 0 ||
+    text.includes('```') ||
+    /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text) ||
+    Math.random() >= rate
+  )
+    return text
+  return `${text.trimEnd()}${variants[Math.floor(Math.random() * variants.length)]}`
 }
 
-/**
- * 拟真活人阅读与打字轻量耗时：
- * 消除过量的人工沉睡（此前单句额外休眠 2~4 秒），保持轻快自然的即时响应
- */
 export function calculateTypingDelay(sentence: string, isFirstSentence = false): number {
-  if (isFirstSentence) {
-    // 首句：微小起手延迟，快速发出 (150ms ~ 350ms)
-    return Math.floor(150 + Math.random() * 200)
-  }
-  // 多句续接：短暂停顿，避免刷屏即可 (300ms ~ 600ms)
-  const typing = Math.min(600, sentence.length * 15)
-  return Math.floor(300 + typing)
+  return isFirstSentence ? Math.floor(150 + Math.random() * 200) : Math.floor(300 + Math.min(600, sentence.length * 15))
 }
