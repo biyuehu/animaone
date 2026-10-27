@@ -1,14 +1,16 @@
+import type { Logger } from 'kotori-bot'
+
 export interface AbilityContext {
   readonly userId: string
   readonly groupId?: string
   readonly platform: string
   readonly identity: string
-  readonly isOwner: boolean
+  readonly isMaster: boolean
 }
 
 export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = unknown> {
   readonly parameters?: Record<string, unknown>
-  readonly ownerOnly?: boolean
+  readonly masterOnly?: boolean
   readonly execute: (args: Args, ctx: AbilityContext) => Promise<Result>
 }
 
@@ -22,6 +24,8 @@ export interface Ability<Args = any, Result = unknown> {
 
 export class AbilityManager {
   private readonly abilities: Map<string, Ability> = new Map()
+
+  public constructor(private readonly logger: Logger) {}
 
   public register(ability: Ability): void {
     this.abilities.set(ability.name, ability)
@@ -39,18 +43,19 @@ export class AbilityManager {
         const result = await ability.provideContext(ctx)
         if (result) list.push(result)
       } catch (err) {
-        console.error(`[Ability] ${ability.name} provideContext failed:`, err instanceof Error ? err.message : err)
+        this.logger
+          .label('Ability')
+          .error(`${ability.name} provideContext failed:`, err instanceof Error ? err.message : err)
       }
     }
     return list
   }
 
-  public getGeminiFunctionDeclarations(isOwner: boolean, excludeSilence = false): Record<string, unknown>[] {
+  public getGeminiFunctionDeclarations(isMaster: boolean): Record<string, unknown>[] {
     const declarations: Record<string, unknown>[] = []
     for (const ability of this.abilities.values()) {
       if (ability.toolDefinition) {
-        if (ability.toolDefinition.ownerOnly && !isOwner) continue
-        if (excludeSilence && ability.name === 'choose_silence') continue
+        if (ability.toolDefinition.masterOnly && !isMaster) continue
         declarations.push({
           name: ability.name,
           description: ability.description,

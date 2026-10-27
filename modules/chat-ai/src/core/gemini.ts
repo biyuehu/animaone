@@ -1,6 +1,6 @@
 import type { Content, GenerateContentResponse, Part } from '@google/genai'
 import { GoogleGenAI, HarmBlockThreshold, HarmCategory } from '@google/genai'
-import type { Context } from 'kotori-bot'
+import type { Logger } from 'kotori-bot'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { AbilityContext, AbilityManager } from '../ability'
 
@@ -8,13 +8,13 @@ export interface GeminiClientConfig {
   readonly apiKey: string
   readonly modelName: string
   readonly proxy?: string
-  readonly logger?: Context['logger']
+  readonly logger?: Logger
 }
 
 export class GeminiClient {
   private readonly ai: GoogleGenAI
   private readonly modelName: string
-  private readonly logger?: Context['logger']
+  private readonly logger?: Logger
 
   constructor(config: GeminiClientConfig) {
     this.modelName = config.modelName
@@ -56,11 +56,10 @@ export class GeminiClient {
     newMessage: string,
     abilityManager?: AbilityManager,
     abilityCtx?: AbilityContext,
-    maxLoops = 5,
-    excludeSilence = false
+    maxLoops = 5
   ): Promise<string> {
-    const isOwner = abilityCtx?.isOwner ?? false
-    const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isOwner, excludeSilence) : []
+    const isMaster = abilityCtx?.isMaster ?? false
+    const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isMaster) : []
 
     const mergedHistory: Content[] = []
     for (const h of history) {

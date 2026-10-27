@@ -22,7 +22,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService):
     name: 'trigger_dream_reflection',
     description: '仅主人可用。主动闭上眼睛做梦发呆，从潜意识抽取过往经历进行联想与反思，寻找新的灵感与认知。',
     toolDefinition: {
-      ownerOnly: true,
+      masterOnly: true,
       parameters: { type: 'OBJECT', properties: {} },
       execute: async (_args, ctx: AbilityContext) => ({
         success: true,
@@ -37,7 +37,7 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
     name: 'web_search_or_fetch',
     description: '抓取指定 URL 网页的正文文本，或者通过 DuckDuckGo 搜索即时网络信息与摘要',
     toolDefinition: {
-      ownerOnly: false,
+      masterOnly: false,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -122,7 +122,7 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
     description:
       '当主人告知其个人喜好、习惯、特征、重要事实或明确要求记住某事时，必须主动调用此工具立即持久化到数据库中',
     toolDefinition: {
-      ownerOnly: true,
+      masterOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -163,7 +163,7 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
     name: 'recall_cross_platform_chat',
     description: '主动穿梭查阅在其他平台终端（如 onebot、cmd）或最近会话中的聊天记录与记忆要点',
     toolDefinition: {
-      ownerOnly: true,
+      masterOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -186,10 +186,10 @@ export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryServi
             const scope = parseScopeKey(c.scope)
             const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
             const platformTag = scope.platform.toUpperCase()
-            const isOwner = c.userId === '__master__' || c.role === 'model'
+            const isMaster = c.userId === '__master__' || c.role === 'model'
             const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
-            const ownerTag = c.role !== 'model' && isOwner ? '[OWNER]' : ''
-            const line = `[${platformTag}][${chatType}]${senderTag}${ownerTag} ${c.content}`
+            const masterTag = c.role !== 'model' && isMaster ? '[MASTER]' : ''
+            const line = `[${platformTag}][${chatType}]${senderTag}${masterTag} ${c.content}`
             return {
               formatted: line,
               time: c.time
@@ -221,7 +221,7 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
     description:
       '仅主人可用。跨平台、跨所有群聊与私聊进行全知记忆检索。支持查阅过往原话、客观事件节点以及主人自身沉淀的历史画像与偏好设定。',
     toolDefinition: {
-      ownerOnly: true,
+      masterOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -301,7 +301,7 @@ export function createSearchChannelPublicMemoriesAbility(memory: HierarchicalMem
     description:
       '翻阅当前群聊内发生过的公开历史对话与事件总结，也可检索关于主人允许公开的对外人设。严格受本群作用域与隐私限制。',
     toolDefinition: {
-      ownerOnly: false,
+      masterOnly: false,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -371,7 +371,7 @@ export const terminalExecuteAbility: Ability = {
   name: 'execute_terminal_command',
   description: '在宿主机系统中执行 shell / terminal 命令并返回标准输出与错误（仅主人可用）',
   toolDefinition: {
-    ownerOnly: true,
+    masterOnly: true,
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -398,7 +398,7 @@ export const fileReadOrWriteAbility: Ability = {
   description:
     '安全读写工作区本地文件。写文件直接写入多行完整内容，无需命令行转义，避免平台编码与换行问题（仅主人可用）',
   toolDefinition: {
-    ownerOnly: true,
+    masterOnly: true,
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -433,7 +433,7 @@ export const silenceAbility: Ability = {
   description:
     '仅在无明确指名或偶发围观群聊时，如果你觉得群内话题与你无关、无需插嘴时调用此工具保持静默。注意：当有人明确艾特你、引用你的话或直接对你发起提问时，请正常友好作答，严禁随意滥用此工具已读不回。',
   toolDefinition: {
-    ownerOnly: false,
+    masterOnly: false,
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -452,7 +452,7 @@ export function createKotoriMessagingAbility(ctx: Context): Ability {
     name: 'kotori_send_message',
     description: '通过 Kotori 底层适配器主动向指定的实例投递群消息或私聊消息',
     toolDefinition: {
-      ownerOnly: true,
+      masterOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
