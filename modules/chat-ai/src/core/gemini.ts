@@ -33,6 +33,23 @@ export class GeminiClient {
     })
   }
 
+  public async generateText(prompt: string, temperature = 0.2): Promise<string> {
+    const response = await this.ai.models.generateContent({
+      model: this.modelName,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        temperature,
+        safetySettings: [
+          { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+        ]
+      }
+    })
+    return response.text?.trim() ?? ''
+  }
+
   public async chat(
     systemPrompt: string,
     history: { role: 'user' | 'model'; content: string }[],

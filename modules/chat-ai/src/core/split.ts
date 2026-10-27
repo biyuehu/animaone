@@ -5,15 +5,7 @@
  */
 export function splitSentences(text: string, threshold: number, minLength = 12, maxLength = 35): string[] {
   if (threshold > 0 && text.trim().length >= threshold) return [text.replaceAll(/\n\n/g, '\n').trim()]
-  if (
-    text.includes('```') ||
-    text.includes('import ') ||
-    text.includes('function ') ||
-    text.includes('export ') ||
-    text.includes('{\n') ||
-    text.includes('[\n') ||
-    /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text)
-  )
+  if (text.includes('```') || text.includes('{\n') || text.includes('[\n') || /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text))
     return [text.trim()]
 
   const cleaned = text

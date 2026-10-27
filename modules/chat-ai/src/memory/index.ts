@@ -1,8 +1,9 @@
+import type { GeminiClient } from '../core/gemini'
 import { formatAndTruncateMemory } from './context'
 import { parseScopeKey } from './scope'
 import { SlidingWindowMemory } from './sliding-window'
 import { MemoryDatabase } from './store'
-import { MemorySummarizer } from './summarizer'
+import { MemorySummarizer, type SummarizerConfig } from './summarizer'
 
 export * from './scope'
 export * from './sliding-window'
@@ -19,23 +20,31 @@ export class HierarchicalMemoryService {
   private pendingDreamSpoken: string | null = null
   private readonly maxTurns: number
   private readonly summaryInterval: number
+  private readonly summaryCharLimit: number
   private readonly activeMemoryCapacity: number
+  private readonly idleCompactTimeout: number
+  private readonly enableDreamReflection: boolean
 
   constructor(
-    modelName: string,
-    apiKey: string,
+    geminiClient: GeminiClient,
     dbPath: string,
     maxTurns: number,
     summaryInterval: number,
+    summaryCharLimit: number,
     activeMemoryCapacity: number,
-    proxy?: string
+    summarizerConfig: SummarizerConfig,
+    idleCompactTimeout: number,
+    enableDreamReflection = true
   ) {
     this.maxTurns = maxTurns
     this.summaryInterval = summaryInterval
+    this.summaryCharLimit = summaryCharLimit
     this.activeMemoryCapacity = activeMemoryCapacity
+    this.idleCompactTimeout = idleCompactTimeout
+    this.enableDreamReflection = enableDreamReflection
     this.db = new MemoryDatabase(dbPath)
     this.slidingWindow = new SlidingWindowMemory(maxTurns)
-    this.summarizer = new MemorySummarizer(apiKey, this.db, modelName, proxy)
+    this.summarizer = new MemorySummarizer(geminiClient, this.db, summarizerConfig)
   }
 
   /**
@@ -51,8 +60,8 @@ export class HierarchicalMemoryService {
     messageId = ''
   ): void {
     if (!content.trim()) return
-    this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName)
-    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
+    this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
+    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName)
   }
 
   /**
@@ -71,10 +80,10 @@ export class HierarchicalMemoryService {
     isOwner = false,
     messageId = ''
   ): void {
-    this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName)
+    this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
 
-    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
+    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName)
     this.db.saveRecentMessage(scopeKey, 'model', modelMsg)
 
     // 1. 维护会话事件缓冲区
@@ -88,7 +97,8 @@ export class HierarchicalMemoryService {
     this.uncommittedChatCount.set(scopeKey, chatCount)
 
     if (
-      (chatCount >= this.summaryInterval || chatList.reduce((sum, item) => sum + item.content.length, 0) >= 1500) &&
+      (chatCount >= this.summaryInterval ||
+        chatList.reduce((sum, item) => sum + item.content.length, 0) >= this.summaryCharLimit) &&
       this.summarizer
     ) {
       this.uncommittedChatCount.set(scopeKey, 0)
@@ -111,6 +121,13 @@ export class HierarchicalMemoryService {
     }
   }
 
+  public findQuotedMessage(
+    scopeKey: string,
+    messageId: string
+  ): { role: string; content: string; senderName: string; userId: string } | null {
+    return this.slidingWindow.findMessageByMessageId(scopeKey, messageId)
+  }
+
   public async triggerDream(ownerId: string): Promise<string | null> {
     const spoken = this.summarizer ? await this.summarizer.dreamReflection(ownerId) : null
     if (spoken) this.pendingDreamSpoken = spoken
@@ -129,7 +146,7 @@ export class HierarchicalMemoryService {
 
     for (const [scopeKey, chatList] of this.activeChatBuffer.entries()) {
       if (chatList.length === 0) continue
-      if (now - (chatList[chatList.length - 1]?.timestamp ?? 0) >= 300_000) {
+      if (now - (chatList[chatList.length - 1]?.timestamp ?? 0) >= this.idleCompactTimeout * 1000) {
         this.uncommittedChatCount.set(scopeKey, 0)
         const bufferToCompact = [...chatList]
         chatList.length = 0
@@ -146,7 +163,8 @@ export class HierarchicalMemoryService {
     }
 
     const hour = new Date(now).getHours()
-    if (ownerId && hour >= 2 && hour < 5 && Math.random() < 0.3) await this.triggerDream(ownerId).catch(() => {})
+    if (this.enableDreamReflection && ownerId && hour >= 2 && hour < 5 && Math.random() < 0.3)
+      await this.triggerDream(ownerId).catch(() => {})
   }
 
   public getDatabase(): MemoryDatabase {

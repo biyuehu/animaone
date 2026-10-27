@@ -31,31 +31,40 @@ import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
 export const config = Tsu.Object({
-  apiKey: Tsu.String(),
-  modelName: Tsu.String().default('gemini-3.5-flash-lite'),
-  proxy: Tsu.String().optional(),
-  whitelistedGroups: Tsu.Array(Tsu.String()).default([]),
-  allowedPlatforms: Tsu.Array(Tsu.String()).default(['cmd', 'onebot']),
-  groupActiveRate: Tsu.Number().range(0, 1).default(0.05),
-  botName: Tsu.String().default(DEFAULT_BOT_NAME),
-  ownerNick: Tsu.String().default(DEFAULT_OWNER_NICK),
-  basePersona: Tsu.String().default(DEFAULT_BASE_PERSONA),
-  ownerPrivate: Tsu.String().default(DEFAULT_OWNER_PRIVATE),
-  ownerGroup: Tsu.String().default(DEFAULT_OWNER_GROUP),
-  guestGroup: Tsu.String().default(DEFAULT_GUEST_GROUP),
+  apiKey: Tsu.String().describe('Google Gemini API Key'),
+  modelName: Tsu.String().default('gemini-3.5-flash-lite').describe('使用的 Gemini 模型名称'),
+  proxy: Tsu.String().optional().describe('网络代理地址（如 http://127.0.0.1:2333）'),
+  whitelistedGroups: Tsu.Array(Tsu.String()).default([]).describe('启用群聊感知的白名单群号列表'),
+  allowedPlatforms: Tsu.Array(Tsu.String()).default(['cmd', 'onebot']).describe('允许响应用于交互的平台列表'),
+  groupActiveRate: Tsu.Number().range(0, 1).default(0.05).describe('群聊日常偶发插话/接梗的主动回复概率 (0~1)'),
+  botName: Tsu.String().default(DEFAULT_BOT_NAME).describe('机器人名称'),
+  ownerNick: Tsu.String().default(DEFAULT_OWNER_NICK).describe('对主人的默认基础称呼'),
+  basePersona: Tsu.String().default(DEFAULT_BASE_PERSONA).describe('基础人格设定与言语准则 Prompt'),
+  ownerPrivate: Tsu.String().default(DEFAULT_OWNER_PRIVATE).describe('面对主人私聊时的补充人设'),
+  ownerGroup: Tsu.String().default(DEFAULT_OWNER_GROUP).describe('在群聊中与主人对话时的补充人设'),
+  guestGroup: Tsu.String().default(DEFAULT_GUEST_GROUP).describe('在群聊中与普通群员对话时的补充人设'),
   platformAspects: Tsu.Custom<Record<string, string>>((x) => {
     if (!x || typeof x !== 'object') return false
     for (const v of Object.values(x)) if (typeof v !== 'string') return false
     return true
-  }).default(DEFAULT_PLATFORM_ASPECTS),
-  enableHumanDelay: Tsu.Boolean().default(true),
-  splitThreshold: Tsu.Number().default(120),
-  trailingBracketRate: Tsu.Number().range(0, 1).default(0.08),
-  trailingBracketVariants: Tsu.Array(Tsu.String()).default(['（', '）', '（（', '（（（', '（）']),
-  maxTurns: Tsu.Number().default(20),
-  summaryInterval: Tsu.Number().default(10),
-  activeMemoryCapacity: Tsu.Number().default(15),
-  maxToolLoops: Tsu.Number().default(10)
+  })
+    .default(DEFAULT_PLATFORM_ASPECTS)
+    .describe('各平台专属特质与风格映射'),
+  enableHumanDelay: Tsu.Boolean().default(true).describe('是否开启模拟人类打字延迟'),
+  splitThreshold: Tsu.Number().default(120).describe('长回复整体发送不拆条的字符长度阈值'),
+  trailingBracketRate: Tsu.Number().range(0, 1).default(0.08).describe('短句末尾随机添加半括号（）的拟人概率'),
+  trailingBracketVariants: Tsu.Array(Tsu.String())
+    .default(['（', '）', '（（', '（（（', '（）'])
+    .describe('短句末尾随机追加的半括号变体列表'),
+  followupWindow: Tsu.Number().default(45).describe('群聊跟帖会话窗口判定秒数'),
+  burstThreshold: Tsu.Number().default(8).describe('判定群聊密集水群触发回复的消息条数阈值'),
+  maxTurns: Tsu.Number().default(20).describe('短期对话滑动窗口最大保留轮数'),
+  summaryInterval: Tsu.Number().default(10).describe('自动触发长期记忆归档与提炼的交互轮次间隔'),
+  summaryCharLimit: Tsu.Number().default(1500).describe('群聊累计字符数超限自动提前触发归档总结的字数阈值'),
+  idleCompactTimeout: Tsu.Number().default(300).describe('群聊无活动自动触发记忆压缩的空闲秒数'),
+  activeMemoryCapacity: Tsu.Number().default(15).describe('组装上下文时最多召回的用户画像事实条数'),
+  enableDreamReflection: Tsu.Boolean().default(true).describe('是否开启凌晨闲暇做梦灵感推演'),
+  maxToolLoops: Tsu.Number().default(10).describe('单轮对话大模型工具调用最大循环次数')
 })
 
 export type Config = Tsu.infer<typeof config>
@@ -64,17 +73,32 @@ export function main(ctx: Context, cfg: Config) {
   const gateway = new MessageGateway({
     whitelistedGroups: cfg.whitelistedGroups,
     groupActiveRate: cfg.groupActiveRate,
-    allowedPlatforms: cfg.allowedPlatforms
+    allowedPlatforms: cfg.allowedPlatforms,
+    followupWindow: cfg.followupWindow,
+    burstThreshold: cfg.burstThreshold
+  })
+
+  const geminiClient = new GeminiClient({
+    apiKey: cfg.apiKey,
+    modelName: cfg.modelName,
+    proxy: cfg.proxy,
+    logger: ctx.logger
   })
 
   const memory = new HierarchicalMemoryService(
-    cfg.modelName,
-    cfg.apiKey,
+    geminiClient,
     path.join(ctx.baseDir.data, 'memory.db'),
     cfg.maxTurns,
     cfg.summaryInterval,
+    cfg.summaryCharLimit,
     cfg.activeMemoryCapacity,
-    cfg.proxy
+    {
+      botName: cfg.botName,
+      ownerNick: cfg.ownerNick,
+      basePersona: cfg.basePersona
+    },
+    cfg.idleCompactTimeout,
+    cfg.enableDreamReflection
   )
   const abilityManager = new AbilityManager()
   abilityManager.register(systemStatusAbility)
@@ -88,13 +112,6 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(silenceAbility)
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
-
-  const geminiClient = new GeminiClient({
-    apiKey: cfg.apiKey,
-    modelName: cfg.modelName,
-    proxy: cfg.proxy,
-    logger: ctx.logger
-  })
 
   let isHeartbeatRunning = false
   const heartbeatTask = ctx.task({ cron: '*/3 * * * *', timeZone: 'Asia/Shanghai', start: true }, async () => {
@@ -217,13 +234,14 @@ export function main(ctx: Context, cfg: Config) {
 
       const now = new Date()
       const timeTag = `[${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}]`
-      const quotedMsg = decision.replyId ? memory.getDatabase().findMessageByMessageId(decision.replyId) : null
+      const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
+      const replyHint = quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
 
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
         groupId
-          ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''}${targetMessage}`
+          ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
           : `${timeTag} ${targetMessage}`,
         abilityManager,
         abilityCtx,
@@ -237,24 +255,19 @@ export function main(ctx: Context, cfg: Config) {
 
       if (!reply || reply === '__NO_REPLY__') return
 
-      const cleanReply = reply.replace(/^\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{1,2}\]\s*/, '').trim()
-      if (!cleanReply) return
+      // const reply = reply
+      //   .replace(/^\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{1,2}\]\s*/, '')
+      //   .replace(/<\/?[a-z]+[^>]*>/gi, '')
+      //   .trim()
+      if (!reply) return
 
       if (groupId) gateway.recordBotSpeech(groupId)
 
       queueMicrotask(() => {
-        memory.recordTurn(
-          scopeKey,
-          userId,
-          targetMessage,
-          cleanReply,
-          session.sender.nickname,
-          isOwner,
-          session.messageId
-        )
+        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender.nickname, isOwner, session.messageId)
       })
 
-      const segments = cfg.enableHumanDelay ? splitSentences(cleanReply, cfg.splitThreshold) : [cleanReply]
+      const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
       if (segments.length > 0)
         segments[segments.length - 1] = applyTrailingBracket(
           segments[segments.length - 1],

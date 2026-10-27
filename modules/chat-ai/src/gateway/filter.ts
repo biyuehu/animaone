@@ -11,7 +11,9 @@ export function sanitizeCqCodes(message: string): string {
     })
     .replace(/\[CQ:record,[^\]]*\]/gi, '[语音]')
     .replace(/\[CQ:video,[^\]]*\]/gi, '[视频]')
-    .replace(/\[CQ:face,id=(\d+)[^\]]*\]/gi, '[表情:$1]')
+    .replace(/\[CQ:face,[^\]]*\]/gi, '[表情]')
+    .replace(/\[CQ:at,qq=(.*?)\]/gi, '@$1')
+  // .replace(/\[CQ:[a-z]+,[^\]]*\]/gi, '')
 }
 
 export type GatewayDecision =
@@ -49,6 +51,8 @@ export interface GatewayConfig {
   readonly whitelistedGroups: string[]
   readonly groupActiveRate: number
   readonly allowedPlatforms: string[]
+  readonly followupWindow?: number
+  readonly burstThreshold?: number
 }
 
 export class MessageGateway {
@@ -67,7 +71,7 @@ export class MessageGateway {
     userId: string,
     groupId: string | undefined,
     rawMessage: string,
-    platform = '',
+    platform: string,
     masterId: string,
     botSelfId: string,
     botName: string
@@ -86,28 +90,23 @@ export class MessageGateway {
     )
       return rejectedDecision('rejected')
 
-    // 维护各群 60 秒内的密集消息时间戳
     const now = Date.now()
     const timestamps = (this.recentMsgTimestamps.get(groupId) ?? []).filter((t) => now - t < 60_000)
     timestamps.push(now)
     this.recentMsgTimestamps.set(groupId, timestamps)
-    const isChatBurst = timestamps.length >= 8
+    const isChatBurst = timestamps.length >= (this.config.burstThreshold ?? 8)
 
     const replyMatch = rawMessage.match(/\[CQ:reply,id=(\d+)\]/i)
-    const atCq = `[CQ:at,qq=${botSelfId}]`
-
-    if (
-      replyMatch ||
-      (atCq && rawMessage.includes(atCq)) ||
-      rawMessage.includes(`@${botName}`) ||
-      rawMessage.includes(botName)
-    )
+    const atCq = botSelfId ? `[CQ:at,qq=${botSelfId}]` : ''
+    const isAtMe = (atCq && rawMessage.includes(atCq)) || (botSelfId && rawMessage.includes(`@${botSelfId}`))
+    if (replyMatch || isAtMe || rawMessage.includes(`@${botName}`) || rawMessage.includes(botName))
       return allowedDecision(
         'group_direct',
         sanitizeCqCodes(
           rawMessage
             .replace(/\[CQ:reply,id=\d+\]/gi, '')
             .replaceAll(atCq, '')
+            .replaceAll(`@${botSelfId}`, '')
             .replaceAll(`@${botName}`, '')
             .trim() || '[艾特了你]'
         ),
@@ -116,10 +115,11 @@ export class MessageGateway {
       )
 
     // 3. 水群跟帖判定（Follow-up Window）：
-    // 若机器人在本群最近 45 秒内发过言，且群友紧接着发出有意义的回复（>= 2字），
+    // 若机器人在本群最近指定窗口时间内发过言，且群友紧接着发出有意义的回复（>= 2字），
     // 判定为群友顺着刚才的话题与机器人对话，直接放行，不再要求重复命中随机概率
     const lastTime = this.lastBotSpeechTime.get(groupId)
-    if (lastTime && now - lastTime < 45_000 && rawMessage.trim().length >= 2)
+    const followupMs = (this.config.followupWindow ?? 45) * 1000
+    if (lastTime && now - lastTime < followupMs && rawMessage.trim().length >= 2)
       return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), isChatBurst)
 
     // 4. 普通偶发主动水群

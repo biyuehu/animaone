@@ -1,32 +1,20 @@
-import { GoogleGenAI } from '@google/genai'
-import { ProxyAgent, fetch as undiciFetch } from 'undici'
+import type { GeminiClient } from '../core/gemini'
 import type { MemoryDatabase } from './store'
 
 type FactCategory = 'preference' | 'identity' | 'event' | 'relation'
 
+export interface SummarizerConfig {
+  readonly botName: string
+  readonly ownerNick: string
+  readonly basePersona: string
+}
+
 export class MemorySummarizer {
-  private readonly ai: GoogleGenAI
-  private readonly modelName: string
-
   constructor(
-    apiKey: string,
+    private readonly client: GeminiClient,
     private readonly db: MemoryDatabase,
-    modelName: string,
-    proxy?: string
-  ) {
-    this.modelName = modelName
-    let fetchFn: typeof fetch | undefined
-    if (proxy) {
-      const agent = new ProxyAgent(proxy.startsWith('http') ? proxy : `http://${proxy}`)
-      fetchFn = ((url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) =>
-        undiciFetch(url as string, { ...(init as object), dispatcher: agent })) as unknown as typeof fetch
-    }
-
-    this.ai = new GoogleGenAI({
-      apiKey,
-      ...(fetchFn ? { httpOptions: { fetch: fetchFn } } : {})
-    })
-  }
+    private readonly config: SummarizerConfig
+  ) {}
 
   public async compactChatHistory(
     scopeKey: string,
@@ -46,12 +34,7 @@ export class MemorySummarizer {
 ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
 
     try {
-      const response = await this.ai.models.generateContent({
-        model: this.modelName,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: { temperature: 0.3 }
-      })
-      const text = response.text?.trim() ?? ''
+      const text = await this.client.generateText(prompt, 0.3)
       const summaryMatch = text.match(/\[SUMMARY\]\s*(.*)/)
       const tagsMatch = text.match(/\[TAGS\]\s*(.*)/)
 
@@ -66,7 +49,6 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
           createdAt: Date.now()
         })
 
-        // 概念共现拓扑建边：如果存在标签，与共享标签的历史事件节点两两相连
         if (nodeId && tagsMatch) {
           const tags = tagsMatch[1]
             .split(/[,，;； ]+/)
@@ -74,9 +56,8 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
             .filter(Boolean)
           for (const tag of tags) {
             const relatedNodes = this.db.searchMemoryNodes(scopeKey, tag, 3)
-            for (const related of relatedNodes) {
+            for (const related of relatedNodes)
               if (related.id && related.id !== nodeId) this.db.linkNodes(nodeId, related.id, tag)
-            }
           }
         }
       }
@@ -85,33 +66,22 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
     }
   }
 
-  // 仿生做梦/闲暇灵感推演（从随机两条旧记忆碰撞出新顿悟）
-  public async dreamReflection(ownerId: string): Promise<string | null> {
+  public async dreamReflection(_ownerId: string): Promise<string | null> {
     const nodes = this.db.getRandomNodesForReflection(2)
     if (nodes.length < 2) return null
 
-    const prompt = `你是一名傲娇但极其聪明的毒舌小女孩（露米）。你在夜深人静发呆做梦时，回顾了过往经历的两件事：
+    const prompt = `你是${this.config.botName}，称呼你的主人为${this.config.ownerNick}。基础人设为：${this.config.basePersona}
+你在夜深人静发呆做梦时，回顾了过往经历的两件事：
 记忆A: [${nodes[0].summary}] (线索: ${nodes[0].tags})
 记忆B: [${nodes[1].summary}] (线索: ${nodes[1].tags})
 
 请发挥你的主动联想能力，顺藤摸瓜寻找这两件事之间的隐秘联系或潜在灵感：
-1. 如果两件事有关联，请提炼出一个新的顿悟或关于笨蛋大哥哥的深层认知（1句，存入长期事实）。
-2. 并以傲娇得意的口吻，写一句未来找大哥哥聊天时随口吐槽他的话（格式: [SPOKEN] 吐槽台词）。`
+1. 如果两件事有关联，请提炼出一个新的顿悟或关于主人的深层认知（1句，存入长期事实）。
+2. 并以符合你人设的口吻，写一句未来找主人聊天时随口吐槽或提起的话（格式: [SPOKEN] 台词）。`
 
     try {
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: { temperature: 0.7 }
-      })
-      const text = response.text?.trim() ?? ''
+      const text = await this.client.generateText(prompt, 0.7)
       const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
-
-      // 将做梦顿悟建立跨记忆关联
-      if (nodes[0].id && nodes[1].id) this.db.linkNodes(nodes[0].id, nodes[1].id, 'dream_association')
-
-      // 沉淀新灵感事实
-      this.db.upsertFact(ownerId, `[做梦灵感] ${text.replace(/\[SPOKEN\].*/, '').trim()}`, 'event')
       return spokenMatch ? spokenMatch[1].trim() : null
     } catch (err) {
       console.error('[MemorySummarizer] Dream reflection failed:', err instanceof Error ? err.message : err)
@@ -128,22 +98,17 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
 ${recentMessages.join('\n')}`
 
     try {
-      const response = await this.ai.models.generateContent({
-        model: this.modelName,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: { temperature: 0.2 }
-      })
-
-      const lines = response.text?.split('\n') ?? []
+      const text = await this.client.generateText(prompt, 0.2)
+      const lines = text.split('\n')
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed || trimmed.includes('NONE')) continue
         const match = trimmed.match(/\[(.*?)\](?:\[(.*?)\])?\s*(.*)/)
         if (!match) continue
 
-        const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) ?? 'preference'
+        const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) || 'preference'
         const visibility = match[2]?.toLowerCase() === 'public' ? 'public' : 'private'
-        const fact = (match[3] ?? '').trim()
+        const fact = (match[3] || '').trim()
         if (!fact || fact.length < 3) continue
 
         const EDIT_INSTRUCTION_RE =
@@ -157,7 +122,7 @@ ${recentMessages.join('\n')}`
           continue
         }
 
-        this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) ?? '')
+        this.db.upsertFact(userId, fact, category, visibility, sourceScope, recentMessages[0]?.slice(0, 50) || '')
       }
     } catch (err) {
       console.error('[MemorySummarizer] Profile extraction failed:', err instanceof Error ? err.message : err)

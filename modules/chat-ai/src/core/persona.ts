@@ -44,9 +44,9 @@ export function buildSystemPrompt(
       `接入平台：${runtime.platform} (实例：${runtime.identity})`,
       `对话环境：${runtime.groupId ? `公开群聊 (Group ID：${runtime.groupId})` : '私聊环境 (Private)'}`,
       runtime.groupId
-        ? '【群聊公屏流提示】上下文中带有 [群员: 昵称] 或 [OWNER: 昵称] 是你在群内旁听到的不同群友真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
+        ? '【群聊公屏流提示】上下文中带有 [群员: 昵称] 或 [主人: 昵称] 是你在群内旁听到的不同群友真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
         : null,
-      `当前对话者身份：${runtime.isOwner ? 'MASTER' : 'GROUP_MEMBER'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
+      `当前对话者身份：${runtime.isOwner ? '主人' : '群友'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
     ]
       .filter(Boolean)
       .join('\n'),
