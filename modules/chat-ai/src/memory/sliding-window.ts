@@ -29,7 +29,7 @@ export const userMessage = (content: string, userId = '', senderName = '', times
 export class SlidingWindowMemory {
   private readonly history: Map<string, ChatMessage[]> = new Map()
 
-  constructor(private readonly maxTurns: number = 20) {}
+  constructor(private readonly maxTurns: number) {}
 
   addMessage(scopeKey: string, role: 'user' | 'model', content: string, userId = '', senderName = ''): void {
     const cleaned = content.trim()

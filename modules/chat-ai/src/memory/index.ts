@@ -62,17 +62,29 @@ export class HierarchicalMemoryService {
       this.slidingWindow.loadInitialMessages(scopeKey, this.db.loadRecentMessages(scopeKey, this.maxTurns))
 
     const isGroup = parseScopeKey(scopeKey).type === 'group'
-    return this.slidingWindow.getContext(scopeKey).map((m) =>
-      m.role === 'model'
-        ? { role: 'model', content: m.content }
-        : {
-            role: 'user',
-            content:
-              isGroup && m.userId
-                ? `${masterId && String(m.userId) === String(masterId) ? `[OWNER][${m.senderName || 'Master'}(${m.userId})]` : `[GUEST][${m.senderName || 'User'}(${m.userId})]`} ${m.content}`
-                : m.content
-          }
-    )
+    const formatTime = (ts: number) => {
+      const d = new Date(ts)
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      const hours = String(d.getHours()).padStart(2, '0')
+      const minutes = String(d.getMinutes()).padStart(2, '0')
+      return `${month}/${day} ${hours}:${minutes}`
+    }
+
+    return this.slidingWindow.getContext(scopeKey).map((m) => {
+      const timeTag = `[${formatTime(m.timestamp)}]`
+      if (m.role === 'model') {
+        return { role: 'model', content: `${timeTag} ${m.content}` }
+      }
+      const userPrefix =
+        isGroup && m.userId
+          ? `${masterId && String(m.userId) === String(masterId) ? `[OWNER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[GUEST: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
+          : ''
+      return {
+        role: 'user',
+        content: userPrefix ? `${timeTag} ${userPrefix} ${m.content}` : `${timeTag} ${m.content}`
+      }
+    })
   }
 
   public assemblePromptContext(_scopeKey: string, userId = ''): string[] {

@@ -1,3 +1,24 @@
+/**
+ * 对 CQ 码进行安全精简与降维：
+ * 保留语义相关的标签（如 [CQ:at,qq=...]、[CQ:face,id=...]、[CQ:image]、[CQ:record]），
+ * 剔除极长的二进制 Hash、URL、fileid、rkey 等会被 LLM 安全审查判定为 PROHIBITED_CONTENT 的载荷数据。
+ */
+export function sanitizeCqCodes(message: string): string {
+  return message
+    .replace(/\[CQ:image,[^\]]*\]/gi, (match) => {
+      // 提取可能有意义的 summary（如动画表情描述）
+      const summaryMatch = match.match(/summary=([^,\]]+)/i)
+      if (summaryMatch) {
+        const decoded = summaryMatch[1].replace(/&#91;/g, '[').replace(/&#93;/g, ']')
+        return `[图片:${decoded}]`
+      }
+      return '[图片]'
+    })
+    .replace(/\[CQ:record,[^\]]*\]/gi, '[语音]')
+    .replace(/\[CQ:video,[^\]]*\]/gi, '[视频]')
+    .replace(/\[CQ:face,id=(\d+)[^\]]*\]/gi, '[表情:$1]')
+}
+
 export type GatewayDecision =
   | {
       readonly allow: true
@@ -46,7 +67,8 @@ export class MessageGateway {
 
     const isOwner = masterId ? String(userId) === String(masterId) : false
 
-    if (!groupId) return isOwner ? allowedDecision('owner_direct', rawMessage) : rejectedDecision('rejected')
+    if (!groupId)
+      return isOwner ? allowedDecision('owner_direct', sanitizeCqCodes(rawMessage)) : rejectedDecision('rejected')
 
     const scopedGroupKey = `${platform}:${groupId}`
     if (!this.config.whitelistedGroups.includes(groupId) && !this.config.whitelistedGroups.includes(scopedGroupKey))
@@ -58,11 +80,11 @@ export class MessageGateway {
       let cleaned = rawMessage
       if (atCq) cleaned = cleaned.replaceAll(atCq, '')
       cleaned = cleaned.replaceAll(`@${botName}`, '').trim()
-      return allowedDecision('group_direct', cleaned)
+      return allowedDecision('group_direct', sanitizeCqCodes(cleaned))
     }
 
     return rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
-      ? allowedDecision('group_casual', rawMessage)
+      ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage))
       : rejectedDecision('rejected')
   }
 }

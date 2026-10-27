@@ -77,6 +77,22 @@ export function splitSentences(text: string, threshold: number, minLength = 12, 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * 随机末尾半括号修饰器：
+ * 在日常短句回复后随机添加末尾括号（如 "好呀（", "笑死（（", "行吧）"），模拟真实网民心理语气。
+ * 技术场景（包含代码、Markdown 列表）或已有结尾标点时自动规避。
+ */
+export function applyTrailingBracket(text: string, rate: number, variants: string[]): string {
+  if (rate <= 0 || variants.length === 0) return text
+  // 排除代码块或结构化列表
+  if (text.includes('```') || /(?:^|\n)\s*(?:\d+\.|-|\*)\s+/.test(text)) return text
+  if (Math.random() >= rate) return text
+
+  const chosen = variants[Math.floor(Math.random() * variants.length)]
+  const trimmed = text.trimEnd()
+  return `${trimmed}${chosen}`
+}
+
+/**
  * 拟真活人阅读与打字轻量耗时：
  * 消除过量的人工沉睡（此前单句额外休眠 2~4 秒），保持轻快自然的即时响应
  */

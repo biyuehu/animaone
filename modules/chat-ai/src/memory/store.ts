@@ -269,7 +269,7 @@ export class MemoryDatabase {
 
   public getProfileFactRecords(
     userId: string,
-    limit = 20,
+    limit: number,
     visibilityFilter?: 'public' | 'private'
   ): ProfileFactRecord[] {
     const query = visibilityFilter
@@ -280,7 +280,7 @@ export class MemoryDatabase {
       : this.db.prepare(query).all(userId, limit)) as unknown as ProfileFactRecord[]
   }
 
-  public getProfileFacts(userId: string, limit = 20, visibilityFilter?: 'public' | 'private'): string[] {
+  public getProfileFacts(userId: string, limit: number, visibilityFilter?: 'public' | 'private'): string[] {
     return this.getProfileFactRecords(userId, limit, visibilityFilter).map((r) => r.fact)
   }
 
@@ -308,7 +308,7 @@ export class MemoryDatabase {
       .run(scopeKey, scopeKey)
   }
 
-  public loadRecentMessages(scopeKey: string, limit = 20): ChatMessage[] {
+  public loadRecentMessages(scopeKey: string, limit: number): ChatMessage[] {
     const rows = this.db
       .prepare(
         'SELECT role, content, user_id as userId, sender_name as senderName, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'

@@ -25,7 +25,7 @@ import {
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
-import { calculateTypingDelay, delay, splitSentences } from './core/split'
+import { applyTrailingBracket, calculateTypingDelay, delay, splitSentences } from './core/split'
 import { MessageGateway } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
@@ -48,6 +48,8 @@ export const config = Tsu.Object({
   }).default(DEFAULT_PLATFORM_ASPECTS),
   enableHumanDelay: Tsu.Boolean().default(true),
   splitThreshold: Tsu.Number().default(120),
+  trailingBracketRate: Tsu.Number().range(0, 1).default(0.08),
+  trailingBracketVariants: Tsu.Array(Tsu.String()).default(['（', '）', '（（', '（（（', '（）']),
   maxTurns: Tsu.Number().default(20),
   summaryInterval: Tsu.Number().default(10),
   allowedPlatforms: Tsu.Array(Tsu.String()).default(['onebot']),
@@ -164,12 +166,16 @@ export function main(ctx: Context, cfg: Config) {
         `Received message from <cyan>${isOwner ? 'OWNER' : 'USER'}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
       )
 
+      const now = new Date()
+      const timeTag = `[${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}]`
+      const currentInput = groupId
+        ? `${timeTag} [${isOwner ? 'OWNER' : 'GUEST'}: ${session.sender.nickname ?? 'User'}] [UID: ${userId}] ${targetMessage}`
+        : `${timeTag} ${targetMessage}`
+
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
-        groupId
-          ? `[${isOwner ? 'OWNER' : 'GUEST'}][${session.sender.nickname ?? 'User'}(${userId})] ${targetMessage}`
-          : targetMessage,
+        currentInput,
         abilityManager,
         abilityCtx,
         cfg.maxToolLoops
@@ -187,6 +193,14 @@ export function main(ctx: Context, cfg: Config) {
       })
 
       const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
+      if (segments.length > 0) {
+        const lastIdx = segments.length - 1
+        segments[lastIdx] = applyTrailingBracket(
+          segments[lastIdx],
+          cfg.trailingBracketRate,
+          cfg.trailingBracketVariants
+        )
+      }
       for (let i = 0; i < segments.length; i++) {
         const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
         if (delayTime > 0) await delay(delayTime)
