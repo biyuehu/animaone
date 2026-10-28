@@ -77,3 +77,13 @@ export function applyTrailingBracket(text: string, rate: number, variants: strin
 export function calculateTypingDelay(sentence: string, isFirstSentence = false): number {
   return isFirstSentence ? Math.floor(150 + Math.random() * 200) : Math.floor(300 + Math.min(600, sentence.length * 15))
 }
+
+/**
+ * 清除模型偶发复读的时间戳或身份标签前缀（如 `[10/28 00:44]`、`[10/28 00:44`、`[MEMBER: xxx]` 等）
+ */
+export function stripLeadingTimestamps(text: string): string {
+  return text
+    .replace(/^\s*\[\d{1,2}\/\d{1,2}(?:\s+\d{1,2}:\d{1,2})?\]?\s*/g, '')
+    .replace(/^\s*\[(?:MASTER|MEMBER|GUEST|BOT|USER|AI)[^\]]*\]:?\s*/gi, '')
+    .trim()
+}

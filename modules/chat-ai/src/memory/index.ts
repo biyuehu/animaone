@@ -214,7 +214,7 @@ export class HierarchicalMemoryService {
       if (m.role === 'model') return { role: 'model', content: `${timeTag} ${m.content}` }
       const userPrefix =
         isGroup && m.userId
-          ? `${masterId && String(m.userId) === String(masterId) ? `[MASTER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[GUEST: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
+          ? `${masterId && String(m.userId) === String(masterId) ? `[MASTER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[MEMBER: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
           : ''
       return {
         role: 'user',

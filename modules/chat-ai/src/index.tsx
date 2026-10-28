@@ -17,15 +17,15 @@ import {
 import {
   DEFAULT_BASE_PERSONA,
   DEFAULT_BOT_NAMES,
-  DEFAULT_GUEST_GROUP,
   DEFAULT_MASTER_GROUP,
   DEFAULT_MASTER_NICK,
   DEFAULT_MASTER_PRIVATE,
+  DEFAULT_MEMBER_GROUP,
   DEFAULT_PLATFORM_ASPECTS
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
-import { applyTrailingBracket, calculateTypingDelay, splitSentences } from './core/split'
+import { applyTrailingBracket, calculateTypingDelay, splitSentences, stripLeadingTimestamps } from './core/split'
 import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
@@ -41,7 +41,7 @@ export const config = Tsu.Object({
   basePersona: Tsu.String().default(DEFAULT_BASE_PERSONA).describe('基础人格与灵魂设定 Prompt'),
   masterPrivate: Tsu.String().default(DEFAULT_MASTER_PRIVATE).describe('面对主人私聊时的补充人设'),
   masterGroup: Tsu.String().default(DEFAULT_MASTER_GROUP).describe('在群聊中与主人对话时的补充人设'),
-  guestGroup: Tsu.String().default(DEFAULT_GUEST_GROUP).describe('在群聊中与普通群员对话时的补充人设'),
+  memberGroup: Tsu.String().default(DEFAULT_MEMBER_GROUP).describe('在群聊中与普通群成员对话时的补充人设'),
   platformAspects: Tsu.Custom<Record<string, string>>((x) => {
     if (!x || typeof x !== 'object') return false
     for (const v of Object.values(x)) if (typeof v !== 'string') return false
@@ -237,7 +237,9 @@ export function main(ctx: Context, cfg: Config) {
       const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
       const replyHint = quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
 
-      const sendBotSpeech = async (text: string, isFirstOutput: boolean) => {
+      const sendBotSpeech = async (rawText: string, isFirstOutput: boolean) => {
+        const text = stripLeadingTimestamps(rawText)
+        if (!text) return
         const segments = cfg.enableHumanDelay ? splitSentences(text, cfg.splitThreshold) : [text]
         if (segments.length > 0)
           segments[segments.length - 1] = applyTrailingBracket(
@@ -271,7 +273,7 @@ export function main(ctx: Context, cfg: Config) {
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
         groupId
-          ? `${timeTag} [${isMaster ? 'MASTER' : 'GUEST'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
+          ? `${timeTag} [${isMaster ? 'MASTER' : 'MEMBER'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
           : `${timeTag} ${targetMessage}`,
         abilityManager,
         abilityCtx,

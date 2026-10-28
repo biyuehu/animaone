@@ -42,7 +42,7 @@ export function buildSystemPrompt(
         ? runtime.groupId
           ? `【面对唯一的主人】\n${config.masterGroup}`
           : `【群聊环境-正在与你唯一主人对话】\n${config.masterPrivate}`
-        : `【群聊环境-正在与群成员对话】\n${config.guestGroup}`
+        : `【群聊环境-正在与群成员对话】\n${config.memberGroup}`
     ),
     [
       '【基础感知】',
@@ -53,9 +53,9 @@ export function buildSystemPrompt(
       `接入平台：${runtime.platform}`,
       `对话环境：${runtime.groupId ? `公开群聊 (群 ID：${runtime.groupId})` : '私聊环境'}`,
       runtime.groupId
-        ? '【群聊公屏流提示】上下文中带有 [群员: 昵称] 或 [主人: 昵称] 是你在群内旁听到的不同群友真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
+        ? '【群聊公屏流提示】上下文中带有 [MEMBER: 昵称] 或 [MASTER: 昵称] 是你在群内旁听到的不同群成员真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
         : null,
-      `当前对话者身份：${runtime.isMaster ? '主人' : '群友'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
+      `当前对话者身份：${runtime.isMaster ? '主人' : '群成员'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
     ]
       .filter(Boolean)
       .join('\n'),
