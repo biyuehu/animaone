@@ -286,6 +286,34 @@ export class MemoryDatabase {
   }
 
   /**
+   * 调取潜意识中未在活跃前列展现的画像事实（处于 activeLimit 之后的事实）
+   */
+  public getSubmergedProfileFacts(
+    userId: string,
+    activeLimit: number,
+    limit = 5,
+    visibilityFilter?: 'public' | 'private'
+  ): ProfileFactRecord[] {
+    const query = visibilityFilter
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight ASC, updated_at ASC LIMIT ? OFFSET ?'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY weight ASC, updated_at ASC LIMIT ? OFFSET ?'
+
+    return (visibilityFilter
+      ? this.db.prepare(query).all(userId, visibilityFilter, limit, activeLimit)
+      : this.db.prepare(query).all(userId, limit, activeLimit)) as unknown as ProfileFactRecord[]
+  }
+
+  /**
+   * 提拔潜意识记忆（Promote）：增加权重并更新时间戳，促使其跃升回活跃工作记忆区
+   */
+  public promoteFact(factId: number, bonusWeight = 1): boolean {
+    const res = this.db
+      .prepare('UPDATE user_profiles SET weight = weight + ?, updated_at = ? WHERE id = ?')
+      .run(bonusWeight, Date.now(), factId)
+    return Number(res.changes) > 0
+  }
+
+  /**
    * 严格借鉴 refer2 的分词重叠度 + 时序打分：深度检索 user_profiles 历史画像
    */
   public searchProfileFacts(

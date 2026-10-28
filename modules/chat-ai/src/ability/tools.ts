@@ -30,7 +30,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
           const waitMinutes = Math.ceil((cooldownSeconds - elapsed) / 60)
           return {
             success: false,
-            message: `做梦技能正在冷却中（还需等待 ${waitMinutes} 分钟）。`
+            message: `做梦冷却中（还需等待 ${waitMinutes} 分钟）。刚已经睡过了，无法入睡`
           }
         }
 
@@ -47,6 +47,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
           success: true,
           concept: res.concept,
           learnedFact: res.learnedFact,
+          promotedSubconsciousFact: res.promotedFact?.fact,
           connectedMemoryA: res.nodeA.summary,
           connectedMemoryB: res.nodeB.summary,
           reflectionSpoken: res.spoken || '灵感闪过，但暂时没有想到合适吐槽的话呢'

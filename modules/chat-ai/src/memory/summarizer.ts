@@ -13,6 +13,7 @@ export interface SummarizerConfig {
 export interface DreamReflectionResult {
   readonly concept: string
   readonly learnedFact?: string
+  readonly promotedFact?: { id: number; fact: string }
   readonly spoken: string | null
   readonly nodeA: { id: number; summary: string }
   readonly nodeB: { id: number; summary: string }
@@ -80,24 +81,32 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
     }
   }
 
-  public async dreamReflection(_masterId: string): Promise<DreamReflectionResult | null> {
+  public async dreamReflection(masterId = '__master__'): Promise<DreamReflectionResult | null> {
     const nodes = this.db.getRandomNodesForReflection(2)
     if (nodes.length < 2) return null
+
+    const submergedFacts = this.db.getSubmergedProfileFacts(masterId, 15, 3)
+    const submergedContext =
+      submergedFacts.length > 0
+        ? `\n潜意识中沉睡的旧印象/事实候选：\n${submergedFacts.map((f) => `- [ID: ${f.id}] ${f.fact}`).join('\n')}\n`
+        : ''
 
     const prompt = `你是${this.config.botName}，称呼你的主人为${this.config.masterNick}。基础人设为：${this.config.basePersona}
 你在夜深人静发呆做梦时，回顾了过往经历的两件事：
 记忆A (ID: ${nodes[0].id}): [${nodes[0].summary}] (线索: ${nodes[0].tags})
 记忆B (ID: ${nodes[1].id}): [${nodes[1].summary}] (线索: ${nodes[1].tags})
-
+${submergedContext}
 请发挥主动联想能力，顺藤摸瓜寻找这两件事之间的隐秘联系或潜在灵感：
 1. 提炼出连接两件事的共同概念或顿悟线索词（简短实体词，用于建立认知图谱关联，格式: [CONCEPT] 概念词）。
 2. 如果产生关于主人的深层认知或新事实，提取出来（可选，格式: [FACT] 事实内容，若无则输出 [FACT] NONE）。
-3. 以符合你人设的口吻，写一句未来找主人聊天时随口吐槽或提起的话（格式: [SPOKEN] 台词）。`
+3. 如果上述潜意识旧印象中有某条与本次梦境产生强烈共鸣或被重新证实，可将其提拔唤醒回活跃记忆（格式: [PROMOTE] ID，若无可提拔则输出 [PROMOTE] NONE）。
+4. 以符合你人设的口吻，写一句未来找主人聊天时随口吐槽或提起的话（格式: [SPOKEN] 台词）。`
 
     try {
       const text = await this.client.generateText(prompt, 0.7)
       const conceptMatch = text.match(/\[CONCEPT\]\s*(.*)/)
       const factMatch = text.match(/\[FACT\]\s*(.*)/)
+      const promoteMatch = text.match(/\[PROMOTE\]\s*(.*)/)
       const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
 
       const concept = conceptMatch?.[1]?.trim() || 'dream_association'
@@ -108,16 +117,30 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
       const rawFact = factMatch?.[1]?.trim()
       const learnedFact = rawFact && !rawFact.includes('NONE') ? rawFact : undefined
       if (learnedFact) {
-        this.db.upsertFact('__master__', learnedFact, 'preference', 'private', 'dream:reflection')
+        this.db.upsertFact(masterId, learnedFact, 'preference', 'private', 'dream:reflection')
+      }
+
+      let promotedFact: { id: number; fact: string } | undefined
+      const rawPromoteId = promoteMatch?.[1]?.trim()
+      if (rawPromoteId && !rawPromoteId.includes('NONE')) {
+        const idNum = Number.parseInt(rawPromoteId, 10)
+        if (!Number.isNaN(idNum)) {
+          const matchedSubmerged = submergedFacts.find((f) => f.id === idNum)
+          if (matchedSubmerged) {
+            this.db.promoteFact(idNum, 2)
+            promotedFact = { id: idNum, fact: matchedSubmerged.fact }
+          }
+        }
       }
 
       const spoken = spokenMatch?.[1]?.trim() || null
       this.logger?.info(
-        `Dream reflection generated between node ${nodes[0].id} and ${nodes[1].id} (concept: "${concept}")${learnedFact ? `, learned fact: "${learnedFact}"` : ''}, spoken: "${spoken || 'none'}"`
+        `Dream reflection generated between node ${nodes[0].id} and ${nodes[1].id} (concept: "${concept}")${learnedFact ? `, learned fact: "${learnedFact}"` : ''}${promotedFact ? `, promoted fact: "${promotedFact.fact}" (ID: ${promotedFact.id})` : ''}, spoken: "${spoken || 'none'}"`
       )
       return {
         concept,
         learnedFact,
+        promotedFact,
         spoken,
         nodeA: { id: nodes[0].id ?? 0, summary: nodes[0].summary },
         nodeB: { id: nodes[1].id ?? 0, summary: nodes[1].summary }
