@@ -32,7 +32,7 @@ flowchart TD
     subgraph Persona["4. 人设与感知装配 (core/persona.ts)"]
         SysTime["时间感知 (东八区、诞生天数、当前时刻)"]
         Env["环境感知 (群聊/私聊、平台实例、群聊密集水群感知)"]
-        Identity["身份分支 (masterPrivate / masterGroup / guestGroup)"]
+        Identity["身份分支 (masterPrivate / masterGroup / memberGroup)"]
         Prompt["System Prompt 组装<br/>(L0 底层人设 + L1 画像事实 + 梦境顿悟装配)"]
 
         SysTime --> Prompt
@@ -81,7 +81,7 @@ flowchart TD
 
 - **拟真人设与全方位感知**
   - **时间与生命感知**：感知墙上钟时间（东八区）、自身诞生时刻与存活天数。
-  - **严格权限隔离**：使用框架统一 `master` 语义，严格区分主人私聊（`masterPrivate`）、主人在群（`masterGroup`）与普通群友（`guestGroup`），严防认错人与隐私泄漏。
+  - **严格权限隔离**：使用框架统一 `master` 语义，严格区分主人私聊（`masterPrivate`）、主人在群（`masterGroup`）与普通群成员（`memberGroup`），严防认错人与隐私泄漏。
   - **拟真打字体验**：支持智能标点分句保护、拟人打字延迟（`enableHumanDelay`）与短句末尾随机半括号变体注入。
 
 - **完备能力工具集（Ability）**
@@ -109,7 +109,7 @@ flowchart TD
 | `basePersona` | `string` | *(见常量)* | 基础底色人设设定 |
 | `masterPrivate` | `string` | *(见常量)* | 主人私聊环境下的专属人设提示词 |
 | `masterGroup` | `string` | *(见常量)* | 主人在群聊环境下的交互人设提示词 |
-| `guestGroup` | `string` | *(见常量)* | 普通群友在群聊环境下的交互人设提示词（防认错人） |
+| `memberGroup` | `string` | *(见常量)* | 普通群成员在群聊环境下的交互人设提示词（防认错人） |
 | `platformAspects` | `Record<string, string>` | *(见常量)* | 各平台专属风格特质映射 |
 | `enableHumanDelay` | `boolean` | `true` | 是否启用自然呼吸感的轻量分句与打字发送延迟 |
 | `splitThreshold` | `number` | `120` | 长回复整体发送不拆条的字符长度阈值 |
