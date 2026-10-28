@@ -22,9 +22,10 @@ flowchart TD
     Casual --> Core
 
     subgraph MemoryLayer["3. 认知记忆体系 (memory/ & core/retrieval.ts)"]
-        L0[("Level 0: user_profiles<br/>主人长期事实与画像 (置顶注入 Prompt)")]
-        L1[("Level 1: SlidingWindow & DB<br/>近期对话滑窗 (内存 + 引用秒级反查)")]
-        L2[("Level 2: memory_nodes & memory_links<br/>长期事件图谱 (10轮/1500字/空闲自动提炼，Graph RAG)")]
+        L0["Level 0: constants.ts & config<br/>核心法则与根本人设 (只读置顶注入 Prompt)"]
+        L1[("Level 1: user_profiles<br/>用户画像与事实 (实体偏好/习惯，带权时序注入)")]
+        L2[("Level 2: memory_nodes & memory_links<br/>宏观事件图谱 (10轮/1500字/空闲自动提炼，Graph RAG)")]
+        SessionContext[("会话上下文: SlidingWindow & DB<br/>近期多轮对话流 (RAM + 引用秒级反查)")]
         BM25["core/retrieval.ts<br/>Unigram + Bigram + BM25 + 半衰期衰减"]
     end
 
@@ -32,23 +33,24 @@ flowchart TD
         SysTime["时间感知 (东八区、诞生天数、当前时刻)"]
         Env["环境感知 (群聊/私聊、平台实例、群聊密集水群感知)"]
         Identity["身份分支 (masterPrivate / masterGroup / guestGroup)"]
-        Prompt["System Prompt 组装<br/>(L0 核心事实与梦境顿悟装配)"]
+        Prompt["System Prompt 组装<br/>(L0 底层人设 + L1 画像事实 + 梦境顿悟装配)"]
 
         SysTime --> Prompt
         Env --> Prompt
         Identity --> Prompt
         L0 --> Prompt
+        L1 --> Prompt
     end
 
     Core --> Persona
-    Core --> L1
+    Core --> SessionContext
 
     subgraph Ability["5. 能力与工具系统 (ability/)"]
-        Tools["Function Declarations<br/>- recall_master_omniscient_memories (主人全域检索 + 图谱联想)<br/>- recall_channel_public_memories (群内公共记忆检索)<br/>- recall_cross_platform_chat (跨平台原话调取)<br/>- remember_master_fact (主人专属事实沉淀)<br/>- choose_silence (自主静默)<br/>- web_search_or_fetch / terminal / file / messaging"]
+        Tools["Function Declarations<br/>- search_master_omniscient_memories (主人全知记忆与跨平台原话检索)<br/>- search_channel_public_memories (群内公共记忆检索)<br/>- remember_master_fact (主人专属事实沉淀)<br/>- choose_silence (自主静默)<br/>- web_search_or_fetch / terminal / file / messaging"]
     end
 
     Prompt --> Gemini["6. 核心驱动层 (core/gemini.ts)"]
-    L1 --> Gemini
+    SessionContext --> Gemini
     Tools <-->|"Tool Calls (最多 maxToolLoops 轮)"| Gemini
     BM25 <--> Tools
     L2 <--> Tools
@@ -62,9 +64,10 @@ flowchart TD
 ```
 
 - **三级分层认知记忆系统（HierarchicalMemory）**
-  - **Level 0（核心画像与长期事实）**：存储于 `user_profiles`，无条件注入 Prompt 最高执行区。自动沉淀主人的长期身份、技术偏好、生活习惯，支持带权重的时序更新。
-  - **Level 1（活跃对话工作区）**：由 RAM `SlidingWindowMemory` 与 SQLite 双轨驱动，保留最新 `maxTurns` 轮对话，支持群内引用消息（`findQuotedMessage`）的秒级检索，并支持白名单群 0 Token 被动旁听。
-  - **Level 2（宏观事件图谱与 Graph RAG）**：存储于 `memory_nodes` 与 `memory_links`。支持每 10 轮交互、1500 字累计超限或空闲超时自动提炼 Day 级核心摘要与概念标签。
+  - **Level 0（核心法则与根本人设）**：定义于 `constants.ts` 与插件配置中，作为智能体的底层铁律与人格基石，无条件只读常驻注入 System Prompt 最高执行区。
+  - **Level 1（用户画像与长期事实）**：存储于 `user_profiles`，沉淀特定用户（如主人 `__master__` 或群友）的实体属性、生活习惯、技术偏好与约定，带权重与时序装配进上下文。
+  - **Level 2（宏观事件图谱与 Graph RAG）**：存储于 `memory_nodes` 与 `memory_links`。支持每 10 轮交互、1500 字累计超限或空闲超时自动提炼 Day 级核心摘要与概念标签，平时不占 Prompt，按需主动顺藤摸瓜检索。
+  - **会话上下文（非记忆的即时工作流）**：由 RAM `SlidingWindowMemory` 与 SQLite `recent_messages` 驱动，保留最新 `maxTurns` 轮近期对话流，支持群内引用消息（`findQuotedMessage`）秒级检索与白名单群 0 Token 被动旁听。
   - **夜间潜意识顿悟推演（Dream Reflection）**：凌晨 2~5 点在心跳中自动随机抽取记忆节点进行跨界联想推演，生成灵感并于下一次主人私聊时轻柔提起。
 
 - **多别名触发与智能网关**
@@ -82,39 +85,10 @@ flowchart TD
   - **拟真打字体验**：支持智能标点分句保护、拟人打字延迟（`enableHumanDelay`）与短句末尾随机半括号变体注入。
 
 - **完备能力工具集（Ability）**
-  - `recall_master_omniscient_memories`：主人专用，全域搜索历史事件原话与图谱联想线索。
-  - `recall_channel_public_memories`：群友只读，检索当前频道的公开历史与图谱关联记忆。
+  - `search_master_omniscient_memories`：主人专用，全域搜索历史事件原话与图谱联想线索（可选 query：不传则获取跨平台实时原话与近期事件摘要）。
+  - `search_channel_public_memories`：群友只读，检索当前频道的公开历史与图谱关联记忆。
   - `remember_master_fact`：主人专用，实时沉淀关键事实画像。
-  - `recall_cross_platform_chat`：跨平台调取指定会话最新原话。
-  - 宿主管理与日常工具：安全终端命令执行（`execute_terminal_command`）、文件读写（`file_read_or_write`）、网络搜索与网页抓取（`web_search_or_fetch`）、群聊静音控制（`set_group_ban`）及主动消息推送（`send_kotori_message`）。
-
----
-
-## 模块架构
-
-```
-modules/chat-ai/src/
-├── ability/             # 智能体扩展工具（能力定义、系统状态、网络、终端、文件、消息推送）
-│   ├── index.ts         # AbilityManager 管理器与上下文聚合
-│   ├── system.ts        # 系统状态监控能力
-│   └── tools.ts         # 核心记忆检索、跨平台召回、命令执行等工具集
-├── core/                # 基础核与算法层
-│   ├── constants.ts     # 默认人设模版与基础配置常量
-│   ├── gemini.ts        # Gemini API 通讯、重试与多轮 Function Calling 循环
-│   ├── persona.ts       # 动态 System Prompt 组装与感知注入
-│   ├── retrieval.ts     # 纯 TS 中文分词、BM25 评分与时间半衰期衰减
-│   └── split.ts         # 智能标点分句保护与打字延迟计算
-├── gateway/             # 消息网关层
-│   └── filter.ts        # 消息准入、白名单校验、多别名剥离与场景判断
-├── memory/              # 记忆与存储层
-│   ├── context.ts       # 记忆格式化器与 Prompt 渲染
-│   ├── index.ts         # HierarchicalMemoryService 记忆服务中枢
-│   ├── scope.ts         # 会话作用域 ADT（私聊 / 群聊）与解析器
-│   ├── sliding-window.ts# 内存滑动窗口队列与 ChatMessage 构造
-│   ├── store.ts         # SQLite 数据库底层（底表初始化、平滑迁移、BFS图遍历）
-│   └── summarizer.ts    # 基于大模型的长记忆提炼压缩与画像提取（接入独立 Label Logger）
-└── index.tsx            # 插件入口点、Kotori 中间件与生命周期挂载
-```
+  - 宿主管理与日常工具：安全终端命令执行（`execute_terminal_command`）、文件读写（`file_read_or_write`）、网络搜索与网页抓取（`web_search_or_fetch`）、自主静默（`choose_silence`）及主动消息推送（`kotori_send_message`）。
 
 ---
 
@@ -156,9 +130,6 @@ modules/chat-ai/src/
 ## 开发与构建
 
 ```bash
-# 代码格式化与 Biome 检查
-npx @biomejs/biome check --write modules/chat-ai/src
-
-# 编译与构建插件
+bun fix
 pnpm run build
 ```
