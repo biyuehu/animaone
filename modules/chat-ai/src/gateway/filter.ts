@@ -51,20 +51,18 @@ export interface GatewayConfig {
   readonly whitelistedGroups: string[]
   readonly groupActiveRate: number
   readonly allowedPlatforms: string[]
-  readonly followupWindow?: number
-  readonly burstThreshold?: number
+  readonly followupWindow: number
+  readonly burstThreshold: number
 }
 
 export class MessageGateway {
-  /** 记录机器人最后一次在各群发言的时间戳，用于跟帖会话窗口判断 */
-  private readonly lastBotSpeechTime: Map<string, number> = new Map()
-  /** 记录各群在滑动窗口时间内的消息时间戳，用于判定群聊是否消息过密 */
+  private readonly lastCasualSpeechTime: Map<string, number> = new Map()
   private readonly recentMsgTimestamps: Map<string, number[]> = new Map()
 
   constructor(private readonly config: GatewayConfig) {}
 
-  public recordBotSpeech(groupId: string): void {
-    this.lastBotSpeechTime.set(groupId, Date.now())
+  public recordCasualSpeech(groupId: string): void {
+    this.lastCasualSpeechTime.set(groupId, Date.now())
   }
 
   public evaluate(
@@ -94,31 +92,35 @@ export class MessageGateway {
     const timestamps = (this.recentMsgTimestamps.get(groupId) ?? []).filter((t) => now - t < 60_000)
     timestamps.push(now)
     this.recentMsgTimestamps.set(groupId, timestamps)
-    const isChatBurst = timestamps.length >= (this.config.burstThreshold ?? 8)
+    const isChatBurst = timestamps.length >= this.config.burstThreshold
+
+    const replyId = rawMessage.match(/\[CQ:reply,id=(\d+)\]/i)?.[1]
 
     const atCq = botSelfId ? `[CQ:at,qq=${botSelfId}]` : ''
-    const isAtMe = (atCq && rawMessage.includes(atCq)) || (botSelfId && rawMessage.includes(`@${botSelfId}`))
-    const isNamed = botNames.some((name) => rawMessage.includes(name) || rawMessage.includes(`@${name}`))
-    if (isAtMe || isNamed) {
+    if (
+      (atCq && rawMessage.includes(atCq)) ||
+      (botSelfId && rawMessage.includes(`@${botSelfId}`)) ||
+      botNames.some((name) => rawMessage.includes(name) || rawMessage.includes(`@${name}`))
+    ) {
       let cleaned = rawMessage
         .replace(/\[CQ:reply,id=\d+\]/gi, '')
         .replaceAll(atCq, '')
         .replaceAll(`@${botSelfId}`, '')
-      for (const name of botNames) cleaned = cleaned.replaceAll(`@${name}`, '').replaceAll(name, '')
-      return allowedDecision('group_direct', sanitizeCqCodes(cleaned.trim() || '[艾特了你]'), isChatBurst)
+      for (const name of botNames) cleaned = cleaned.replaceAll(`@${name}`, '')
+      return allowedDecision(
+        'group_direct',
+        sanitizeCqCodes(cleaned.trim() || '[艾特了你]'),
+        isChatBurst || Math.random() > 0.35,
+        replyId
+      )
     }
 
-    // 3. 水群跟帖判定（Follow-up Window）：
-    // 若机器人在本群最近指定窗口时间内发过言，且群友紧接着发出有意义的回复（>= 2字），
-    // 判定为群友顺着刚才的话题与机器人对话，直接放行，不再要求重复命中随机概率
-    const lastTime = this.lastBotSpeechTime.get(groupId)
-    const followupMs = (this.config.followupWindow ?? 45) * 1000
-    if (lastTime && now - lastTime < followupMs && rawMessage.trim().length >= 2)
-      return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), isChatBurst)
+    const lastTime = this.lastCasualSpeechTime.get(groupId)
+    if (lastTime && now - lastTime < this.config.followupWindow * 1000 && rawMessage.trim().length >= 2)
+      return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
 
-    // 4. 普通偶发主动水群
     return rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
-      ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage), isChatBurst)
+      ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
       : rejectedDecision('rejected')
   }
 }

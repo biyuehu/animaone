@@ -272,10 +272,6 @@ export class MemoryDatabase {
     limit: number,
     visibilityFilter?: 'public' | 'private'
   ): ProfileFactRecord[] {
-    // 严格遵循 refer2 一级记忆（工作区）排序与容量控制原则：
-    // 一级记忆只看「评分 (weight)」与「创建/更新时间 (updated_at)」
-    // 优先级：高评分排在前面；评分相同时，最新发生/更新的排在前面；
-    // 超过 limit (activeMemoryCapacity) 的低分/陈旧事实自然被挤出工作区沉底。
     const query = visibilityFilter
       ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
       : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
@@ -477,7 +473,7 @@ export class MemoryDatabase {
   }
 
   /**
-   * 基于 BM25 检索语义相关的二级记忆节点
+   * 基于 BM25 检索语义相关的 Level 2 事件记忆节点 (memory_nodes)
    */
   public searchMemoryNodes(scopeKey: string, query: string, limit: number): MemoryNode[] {
     const rows = this.db

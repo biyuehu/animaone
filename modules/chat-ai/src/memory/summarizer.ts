@@ -10,6 +10,14 @@ export interface SummarizerConfig {
   readonly basePersona: string
 }
 
+export interface DreamReflectionResult {
+  readonly concept: string
+  readonly learnedFact?: string
+  readonly spoken: string | null
+  readonly nodeA: { id: number; summary: string }
+  readonly nodeB: { id: number; summary: string }
+}
+
 export class MemorySummarizer {
   private readonly logger?: Logger
 
@@ -72,23 +80,48 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
     }
   }
 
-  public async dreamReflection(_masterId: string): Promise<string | null> {
+  public async dreamReflection(_masterId: string): Promise<DreamReflectionResult | null> {
     const nodes = this.db.getRandomNodesForReflection(2)
     if (nodes.length < 2) return null
 
     const prompt = `你是${this.config.botName}，称呼你的主人为${this.config.masterNick}。基础人设为：${this.config.basePersona}
 你在夜深人静发呆做梦时，回顾了过往经历的两件事：
-记忆A: [${nodes[0].summary}] (线索: ${nodes[0].tags})
-记忆B: [${nodes[1].summary}] (线索: ${nodes[1].tags})
+记忆A (ID: ${nodes[0].id}): [${nodes[0].summary}] (线索: ${nodes[0].tags})
+记忆B (ID: ${nodes[1].id}): [${nodes[1].summary}] (线索: ${nodes[1].tags})
 
-请发挥你的主动联想能力，顺藤摸瓜寻找这两件事之间的隐秘联系或潜在灵感：
-1. 如果两件事有关联，请提炼出一个新的顿悟或关于主人的深层认知（1句，存入长期事实）。
-2. 并以符合你人设的口吻，写一句未来找主人聊天时随口吐槽或提起的话（格式: [SPOKEN] 台词）。`
+请发挥主动联想能力，顺藤摸瓜寻找这两件事之间的隐秘联系或潜在灵感：
+1. 提炼出连接两件事的共同概念或顿悟线索词（简短实体词，用于建立认知图谱关联，格式: [CONCEPT] 概念词）。
+2. 如果产生关于主人的深层认知或新事实，提取出来（可选，格式: [FACT] 事实内容，若无则输出 [FACT] NONE）。
+3. 以符合你人设的口吻，写一句未来找主人聊天时随口吐槽或提起的话（格式: [SPOKEN] 台词）。`
 
     try {
       const text = await this.client.generateText(prompt, 0.7)
+      const conceptMatch = text.match(/\[CONCEPT\]\s*(.*)/)
+      const factMatch = text.match(/\[FACT\]\s*(.*)/)
       const spokenMatch = text.match(/\[SPOKEN\]\s*(.*)/)
-      return spokenMatch ? spokenMatch[1].trim() : null
+
+      const concept = conceptMatch?.[1]?.trim() || 'dream_association'
+      if (nodes[0].id && nodes[1].id) {
+        this.db.linkNodes(nodes[0].id, nodes[1].id, concept)
+      }
+
+      const rawFact = factMatch?.[1]?.trim()
+      const learnedFact = rawFact && !rawFact.includes('NONE') ? rawFact : undefined
+      if (learnedFact) {
+        this.db.upsertFact('__master__', learnedFact, 'preference', 'private', 'dream:reflection')
+      }
+
+      const spoken = spokenMatch?.[1]?.trim() || null
+      this.logger?.info(
+        `Dream reflection generated between node ${nodes[0].id} and ${nodes[1].id} (concept: "${concept}")${learnedFact ? `, learned fact: "${learnedFact}"` : ''}, spoken: "${spoken || 'none'}"`
+      )
+      return {
+        concept,
+        learnedFact,
+        spoken,
+        nodeA: { id: nodes[0].id ?? 0, summary: nodes[0].summary },
+        nodeB: { id: nodes[1].id ?? 0, summary: nodes[1].summary }
+      }
     } catch (err) {
       this.logger?.error(`Dream reflection failed: ${err instanceof Error ? err.message : String(err)}`)
       return null

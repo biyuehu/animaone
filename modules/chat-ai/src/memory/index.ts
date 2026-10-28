@@ -4,7 +4,7 @@ import { formatAndTruncateMemory } from './context'
 import { parseScopeKey } from './scope'
 import { SlidingWindowMemory } from './sliding-window'
 import { MemoryDatabase } from './store'
-import { MemorySummarizer, type SummarizerConfig } from './summarizer'
+import { type DreamReflectionResult, MemorySummarizer, type SummarizerConfig } from './summarizer'
 
 export * from './scope'
 export * from './sliding-window'
@@ -142,10 +142,10 @@ export class HierarchicalMemoryService {
     return this.slidingWindow.findMessageByMessageId(scopeKey, messageId)
   }
 
-  public async triggerDream(masterId: string): Promise<string | null> {
-    const spoken = this.summarizer ? await this.summarizer.dreamReflection(masterId) : null
-    if (spoken) this.pendingDreamSpoken = spoken
-    return spoken
+  public async triggerDream(masterId: string): Promise<DreamReflectionResult | null> {
+    const res = this.summarizer ? await this.summarizer.dreamReflection(masterId) : null
+    if (res?.spoken) this.pendingDreamSpoken = res.spoken
+    return res
   }
 
   public consumePendingDream(): string | null {
@@ -185,8 +185,8 @@ export class HierarchicalMemoryService {
     }
 
     const hour = new Date(now).getHours()
-    if (this.enableDreamReflection && masterId && hour >= 2 && hour < 5 && Math.random() < 0.3)
-      await this.triggerDream(masterId).catch((err) => {
+    if (this.enableDreamReflection && hour >= 2 && hour < 5 && Math.random() < 0.3)
+      await this.triggerDream(masterId || '__master__').catch((err) => {
         this.logger?.error(`Failed to trigger dream reflection: ${err instanceof Error ? err.message : String(err)}`)
       })
   }
@@ -223,10 +223,10 @@ export class HierarchicalMemoryService {
     })
   }
 
-  public assemblePromptContext(_scopeKey: string, userId?: string): string[] {
+  public assemblePromptContext(_scopeKey: string, userId?: string, visibilityFilter?: 'public' | 'private'): string[] {
     const { profileBlock } = formatAndTruncateMemory(
       [],
-      userId ? this.db.getProfileFactRecords(userId, this.activeMemoryCapacity) : []
+      userId ? this.db.getProfileFactRecords(userId, this.activeMemoryCapacity, visibilityFilter) : []
     )
     return [profileBlock].filter(Boolean)
   }

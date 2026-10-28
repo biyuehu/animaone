@@ -51,11 +51,10 @@ export class AbilityManager {
     return list
   }
 
-  public getGeminiFunctionDeclarations(isMaster: boolean): Record<string, unknown>[] {
+  public getGeminiFunctionDeclarations(_isMaster: boolean): Record<string, unknown>[] {
     const declarations: Record<string, unknown>[] = []
     for (const ability of this.abilities.values()) {
       if (ability.toolDefinition) {
-        if (ability.toolDefinition.masterOnly && !isMaster) continue
         declarations.push({
           name: ability.name,
           description: ability.description,
@@ -69,6 +68,16 @@ export class AbilityManager {
   public async executeTool(name: string, args: unknown, ctx: AbilityContext): Promise<unknown> {
     const ability = this.abilities.get(name)
     if (!ability?.toolDefinition) throw new Error(`Tool ${name} not found`)
+
+    if (ability.toolDefinition.masterOnly && !ctx.isMaster) {
+      this.logger?.warn(`Permission denied: non-master user (${ctx.userId}) attempted to call tool [${name}]`)
+      return {
+        success: false,
+        error: 'PERMISSION_DENIED',
+        message: `操作失败：当前对话者无权调用此工具。此工具仅限主人可用。`
+      }
+    }
+
     return ability.toolDefinition.execute(args, ctx)
   }
 }

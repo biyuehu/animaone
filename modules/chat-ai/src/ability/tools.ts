@@ -13,25 +13,49 @@ const execAsync = promisify(exec)
 
 export const SILENT_SENTINEL = '__NO_REPLY__'
 
-/**
- * 主动做梦灵感推演工具（仅主人可用）：
- * 主动从潜意识中随机抽取旧记忆碎片进行概念碰撞，产生新顿悟并沉淀为灵感
- */
-export function createDreamReflectionAbility(memory: HierarchicalMemoryService): Ability {
+export function createDreamReflectionAbility(memory: HierarchicalMemoryService, cooldownSeconds = 900): Ability {
+  let lastDreamTime = 0
+
   return {
     name: 'trigger_dream_reflection',
-    description: '仅主人可用。主动闭上眼睛做梦发呆，从潜意识抽取过往经历进行联想与反思，寻找新的灵感与认知。',
+    description:
+      '仅主人可用。当主人要求你“做个梦”、“做梦看看”、“发呆沉思”、“找找灵感”或需要进行潜意识联想顿悟时，必须主动调用此工具触发真实梦境反射。工具会从过往事件中碰撞出新概念和台词供你回答。严禁不调工具凭空编造虚假梦境。',
     toolDefinition: {
       masterOnly: true,
       parameters: { type: 'OBJECT', properties: {} },
-      execute: async (_args, ctx: AbilityContext) => ({
-        success: true,
-        reflectionSpoken:
-          (await memory.triggerDream(ctx.userId)) ?? '潜意识里稍微发了会儿呆，不过暂时没有形成特别鲜明的画面呢'
-      })
+      execute: async (_args, ctx: AbilityContext) => {
+        const now = Date.now()
+        const elapsed = (now - lastDreamTime) / 1000
+        if (elapsed < cooldownSeconds) {
+          const waitMinutes = Math.ceil((cooldownSeconds - elapsed) / 60)
+          return {
+            success: false,
+            message: `做梦技能正在冷却中（还需等待 ${waitMinutes} 分钟）。`
+          }
+        }
+
+        lastDreamTime = now
+        const res = await memory.triggerDream(ctx.userId)
+        if (!res) {
+          return {
+            success: false,
+            message: '当前事件记忆不足2条，暂时无法做梦。'
+          }
+        }
+
+        return {
+          success: true,
+          concept: res.concept,
+          learnedFact: res.learnedFact,
+          connectedMemoryA: res.nodeA.summary,
+          connectedMemoryB: res.nodeB.summary,
+          reflectionSpoken: res.spoken || '灵感闪过，但暂时没有想到合适吐槽的话呢'
+        }
+      }
     }
   }
 }
+
 export function createWebSearchOrFetchAbility(proxy?: string): Ability {
   return {
     name: 'web_search_or_fetch',
@@ -113,9 +137,6 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
   }
 }
 
-/**
- * 即刻记忆工具：主动沉淀事实到 SQLite user_profiles
- */
 export function createRememberAbility(memory: HierarchicalMemoryService): Ability {
   return {
     name: 'remember_master_fact',
@@ -155,71 +176,11 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
   }
 }
 
-/**
- * 跨平台/分身灵魂穿梭：调取在其他平台终端或最近会话中的聊天记录与记忆要点
- */
-export function createCrossPlatformRecallAbility(memory: HierarchicalMemoryService): Ability {
-  return {
-    name: 'recall_cross_platform_chat',
-    description: '主动穿梭查阅在其他平台终端（如 onebot、cmd）或最近会话中的聊天记录与记忆要点',
-    toolDefinition: {
-      masterOnly: true,
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          targetPlatform: {
-            type: 'STRING',
-            description: '可选的目标平台名称，如 onebot、cmd。不传则返回所有已知平台的最近对话'
-          },
-          limit: { type: 'INTEGER', description: '获取的条数，默认 6' }
-        }
-      },
-      execute: async (args: { targetPlatform?: string; limit?: number }) => {
-        const limit = args.limit ?? 6
-        // 1. 优先查阅跨平台最新发生的原话记录（无需等待10轮压缩）
-        const recentChats = memory.getDatabase().getGlobalRecentMessages(limit, args.targetPlatform)
-        // 2. 查阅长期沉淀的记忆节点与主人核心事实
-        const nodes = memory.getDatabase().getAllRecentNodes(4, args.targetPlatform)
-        const facts = memory.getDatabase().getProfileFacts('__master__', 10)
-        return {
-          latestRealtimeChats: recentChats.map((c) => {
-            const scope = parseScopeKey(c.scope)
-            const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
-            const platformTag = scope.platform.toUpperCase()
-            const isMaster = c.userId === '__master__' || c.role === 'model'
-            const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
-            const masterTag = c.role !== 'model' && isMaster ? '[MASTER]' : ''
-            const line = `[${platformTag}][${chatType}]${senderTag}${masterTag} ${c.content}`
-            return {
-              formatted: line,
-              time: c.time
-            }
-          }),
-          masterProfileFacts: facts,
-          longTermMemorySummaries: nodes.map((n) => {
-            const scope = parseScopeKey(n.scopeKey)
-            const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
-            const platformTag = scope.platform.toUpperCase()
-            return {
-              formatted: `[${platformTag}][${chatType}] ${n.summary}`,
-              time: new Date(n.endTime).toLocaleString('zh-CN')
-            }
-          })
-        }
-      }
-    }
-  }
-}
-
-/**
- * 主人全知记忆溯源（仅主人可用）：
- * 允许跨平台、跨群聊、跨私聊全局穿透，检索历史原话、事件总结以及深层沉淀的主人历史画像
- */
 export function createSearchMasterOmniscientMemoriesAbility(memory: HierarchicalMemoryService): Ability {
   return {
     name: 'search_master_omniscient_memories',
     description:
-      '仅主人可用。跨平台、跨所有群聊与私聊进行全知记忆检索。支持查阅过往原话、客观事件节点以及主人自身沉淀的历史画像与偏好设定。',
+      '仅主人可用。跨平台、跨所有群聊与私聊进行全知记忆与对话检索。支持查阅过往原话、客观事件节点以及主人自身沉淀的历史画像与偏好设定。query可选：传入时执行关键词语义检索；不传时直接查阅跨平台最新原话与最近事件摘要。',
     toolDefinition: {
       masterOnly: true,
       parameters: {
@@ -227,35 +188,63 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
         properties: {
           query: {
             type: 'STRING',
-            description: '检索关键词或自然语言描述（如：大学、某次提到的电脑配置等）'
+            description:
+              '可选检索关键词或自然语言描述（如：大学、某次提到的电脑配置）。不传则获取跨平台/群聊最近的实时对话与事件'
           },
           targetPlatform: {
             type: 'STRING',
-            description: '可选限定平台（如 onebot），不传则搜索全部平台'
+            description: '可选限定平台（如 onebot、cmd），不传则搜索全部平台'
           },
           limit: {
             type: 'INTEGER',
-            description: '返回结果数量上限，默认 5'
+            description: '返回结果数量上限，默认 6'
           }
-        },
-        required: ['query']
+        }
       },
-      execute: async (args: { query: string; targetPlatform?: string; limit?: number }) => {
-        const limit = args.limit ?? 5
+      execute: async (args: { query?: string; targetPlatform?: string; limit?: number }) => {
+        const limit = args.limit ?? 6
         const db = memory.getDatabase()
+        const queryText = (args.query ?? '').trim()
 
-        // 1. 深度检索主人的历史全量画像（使用 refer2 分词重叠度 + 权重时序打分，不过滤 private）
-        const matchedProfiles = db.searchProfileFacts('__master__', args.query, limit)
+        if (!queryText) {
+          const recentChats = db.getGlobalRecentMessages(limit, args.targetPlatform)
+          const nodes = db.getAllRecentNodes(4, args.targetPlatform)
+          const facts = db.getProfileFacts('__master__', 10)
+          return {
+            latestRealtimeChats: recentChats.map((c) => {
+              const scope = parseScopeKey(c.scope)
+              const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
+              const platformTag = scope.platform.toUpperCase()
+              const isMaster = c.userId === '__master__' || c.role === 'model'
+              const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
+              const masterTag = c.role !== 'model' && isMaster ? '[MASTER]' : ''
+              const line = `[${platformTag}][${chatType}]${senderTag}${masterTag} ${c.content}`
+              return {
+                formatted: line,
+                time: c.time
+              }
+            }),
+            masterProfileFacts: facts,
+            longTermMemorySummaries: nodes.map((n) => {
+              const scope = parseScopeKey(n.scopeKey)
+              const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
+              const platformTag = scope.platform.toUpperCase()
+              return {
+                formatted: `[${platformTag}][${chatType}] ${n.summary}`,
+                time: new Date(n.endTime).toLocaleString('zh-CN')
+              }
+            })
+          }
+        }
 
-        // 2. 跨平台/跨群检索近期相关原话
+        const matchedProfiles = db.searchProfileFacts('__master__', queryText, limit)
         const allRecent = db.getGlobalRecentMessages(50, args.targetPlatform)
-        const queryLower = args.query.toLowerCase()
+        const queryLower = queryText.toLowerCase()
         const matchedDialogues = allRecent
           .filter((msg) => msg.content.toLowerCase().includes(queryLower))
           .slice(0, limit)
 
-        // 3. 全局检索事件总结节点并顺带沿 memory_links 遍历拓扑邻居
-        const eventNodes = db.searchMemoryNodes('', args.query, limit)
+        const eventNodes = db.searchMemoryNodes('', queryText, limit)
         const startNodeIds = eventNodes.map((n) => n.id).filter((id): id is number => typeof id === 'number')
         const graphTraversal = db.traverseGraph(startNodeIds, 1, limit)
 
@@ -291,10 +280,6 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
   }
 }
 
-/**
- * 频道公开记忆检索（群友与公开可用）：
- * 严格限制在当前群聊/当前私聊作用域内，仅允许检索本群事件原话与打了 public 标签的主人公开设定
- */
 export function createSearchChannelPublicMemoriesAbility(memory: HierarchicalMemoryService): Ability {
   return {
     name: 'search_channel_public_memories',
@@ -364,9 +349,6 @@ export function createSearchChannelPublicMemoriesAbility(memory: HierarchicalMem
   }
 }
 
-/**
- * 宿主机终端 Shell 执行能力
- */
 export const terminalExecuteAbility: Ability = {
   name: 'execute_terminal_command',
   description: '在宿主机系统中执行 shell / terminal 命令并返回标准输出与错误（仅主人可用）',
@@ -390,9 +372,6 @@ export const terminalExecuteAbility: Ability = {
   }
 }
 
-/**
- * 专有文件系统读写能力（无命令行转义与编码问题）
- */
 export const fileReadOrWriteAbility: Ability = {
   name: 'file_read_or_write',
   description:
@@ -425,13 +404,9 @@ export const fileReadOrWriteAbility: Ability = {
   }
 }
 
-/**
- * 拟人选择性沉默工具：在群聊偶尔插嘴、或对方无理取闹时，AI可主动选择“已读不回”
- */
 export const silenceAbility: Ability = {
   name: 'choose_silence',
-  description:
-    '仅在无明确指名或偶发围观群聊时，如果你觉得群内话题与你无关、无需插嘴时调用此工具保持静默。注意：当有人明确艾特你、引用你的话或直接对你发起提问时，请正常友好作答，严禁随意滥用此工具已读不回。',
+  description: '如果你觉得群内话题与你无关、无需插嘴时调用此工具保持静默。但禁随意滥用此工具。',
   toolDefinition: {
     masterOnly: false,
     parameters: {
@@ -444,9 +419,6 @@ export const silenceAbility: Ability = {
   }
 }
 
-/**
- * Kotori 框架内部联动能力：主动向指定实例与目标群或好友投递消息
- */
 export function createKotoriMessagingAbility(ctx: Context): Ability {
   return {
     name: 'kotori_send_message',

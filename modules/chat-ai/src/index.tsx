@@ -4,7 +4,6 @@ import { type AdapterConfig, type Api, type Context, Messages, Symbols, sleep, T
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
-  createCrossPlatformRecallAbility,
   createDreamReflectionAbility,
   createKotoriMessagingAbility,
   createRememberAbility,
@@ -64,6 +63,7 @@ export const config = Tsu.Object({
   idleCompactTimeout: Tsu.Number().default(300).describe('群聊无活动自动触发记忆压缩的空闲秒数'),
   activeMemoryCapacity: Tsu.Number().default(15).describe('组装上下文时最多召回的用户画像事实条数'),
   enableDreamReflection: Tsu.Boolean().default(true).describe('是否开启凌晨闲暇做梦灵感推演'),
+  dreamCooldown: Tsu.Number().default(900).describe('主动调用做梦工具的冷却时间（秒，默认15分钟）'),
   maxToolLoops: Tsu.Number().default(10).describe('单轮对话大模型工具调用最大循环次数')
 })
 
@@ -104,10 +104,9 @@ export function main(ctx: Context, cfg: Config) {
   const abilityManager = new AbilityManager(ctx.logger)
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
-  abilityManager.register(createCrossPlatformRecallAbility(memory))
   abilityManager.register(createSearchMasterOmniscientMemoriesAbility(memory))
   abilityManager.register(createSearchChannelPublicMemoriesAbility(memory))
-  abilityManager.register(createDreamReflectionAbility(memory))
+  abilityManager.register(createDreamReflectionAbility(memory, cfg.dreamCooldown))
   abilityManager.register(terminalExecuteAbility)
   abilityManager.register(fileReadOrWriteAbility)
   abilityManager.register(silenceAbility)
@@ -188,8 +187,7 @@ export function main(ctx: Context, cfg: Config) {
     const targetMessage = decision.cleanedMessage ?? rawMessage
 
     if (!geminiClient) {
-      if (isMaster && !groupId)
-        await session.quick('欸？笨蛋主人，你还没在配置里填 GEMINI_API_KEY 呢！快去填好再找我～') // TODO
+      if (isMaster && !groupId) await session.quick('插件未配置 apiKey，无法调用大模型。')
       return next()
     }
 
@@ -199,15 +197,13 @@ export function main(ctx: Context, cfg: Config) {
       )
       const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isMaster }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, isMaster ? '__master__' : undefined))
+      extraContexts.push(...memory.assemblePromptContext(scopeKey, '__master__', isMaster ? undefined : 'public'))
 
       if (isMaster) {
         const dream = memory.consumePendingDream()
         if (dream) {
           ctx.logger.info(`Consumed pending dream reflection for master: "${dream}"`)
-          extraContexts.push(
-            `【潜意识昨夜梦境/顿悟提醒】你昨夜在潜意识中曾产生了以下顿悟或梦境灵感：“${dream}”。如果在当前对话中自然契合，你可以像刚睡醒或随口提起一样轻柔地向主人分享。`
-          )
+          extraContexts.push(`【夜间梦境灵感】昨夜产生了以下顿悟或梦境灵感：“${dream}”。契合时可向主人分享。`)
         }
       }
 
@@ -241,6 +237,36 @@ export function main(ctx: Context, cfg: Config) {
       const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
       const replyHint = quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
 
+      const sendBotSpeech = async (text: string, isFirstOutput: boolean) => {
+        const segments = cfg.enableHumanDelay ? splitSentences(text, cfg.splitThreshold) : [text]
+        if (segments.length > 0)
+          segments[segments.length - 1] = applyTrailingBracket(
+            segments[segments.length - 1],
+            cfg.trailingBracketRate,
+            cfg.trailingBracketVariants
+          )
+
+        for (let i = 0; i < segments.length; i++) {
+          const delayTime = cfg.enableHumanDelay
+            ? Math.max(0, calculateTypingDelay(segments[i], isFirstOutput && i === 0))
+            : 0
+          if (delayTime > 0) {
+            ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${segments.length}`)
+            await sleep(delayTime)
+          }
+          await session.quick(
+            isFirstOutput && i === 0 && groupId && decision.needTargetUser
+              ? Math.random() > 0.5
+                ? Messages(Messages.mention(session.userId), ' ', segments[i])
+                : Messages(Messages.reply(session.messageId), segments[i])
+              : segments[i]
+          )
+        }
+      }
+
+      let hasSentImmediate = false
+      const allEmittedTexts: string[] = []
+
       const reply = await geminiClient.chat(
         systemPrompt,
         memory.getShortTerm(scopeKey, masterId),
@@ -249,53 +275,43 @@ export function main(ctx: Context, cfg: Config) {
           : `${timeTag} ${targetMessage}`,
         abilityManager,
         abilityCtx,
-        cfg.maxToolLoops
+        cfg.maxToolLoops,
+        async (earlyText) => {
+          hasSentImmediate = true
+          allEmittedTexts.push(earlyText)
+          await sendBotSpeech(earlyText, true)
+        }
       )
 
       ctx.logger.info(
         `Session round finished in <yellow>${Date.now() - startTime}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`
       )
 
-      if (!reply || reply === '__NO_REPLY__') return
-
-      // const reply = reply
-      //   .replace(/^\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{1,2}\]\s*/, '')
-      //   .replace(/<\/?[a-z]+[^>]*>/gi, '')
-      //   .trim()
-      if (!reply) return
-
-      if (groupId) gateway.recordBotSpeech(groupId)
-
-      queueMicrotask(() => {
-        memory.recordTurn(scopeKey, userId, targetMessage, reply, session.sender.nickname, isMaster, session.messageId)
-      })
-
-      const segments = cfg.enableHumanDelay ? splitSentences(reply, cfg.splitThreshold) : [reply]
-      if (segments.length > 0)
-        segments[segments.length - 1] = applyTrailingBracket(
-          segments[segments.length - 1],
-          cfg.trailingBracketRate,
-          cfg.trailingBracketVariants
-        )
-
-      for (let i = 0; i < segments.length; i++) {
-        const delayTime = cfg.enableHumanDelay ? calculateTypingDelay(segments[i], i === 0) : 0
-        if (delayTime > 0) {
-          ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${segments.length}`)
-          await sleep(delayTime)
-        }
-        await session.quick(
-          i === 0 && groupId && decision.needTargetUser
-            ? Math.random() > 0.5
-              ? Messages(Messages.mention(session.userId), segments[i])
-              : Messages(Messages.reply(session.messageId), segments[i])
-            : segments[i]
-        )
+      if (reply && reply !== '__NO_REPLY__') {
+        allEmittedTexts.push(reply)
+        await sendBotSpeech(reply, !hasSentImmediate)
       }
+
+      const fullCombinedReply = allEmittedTexts.join('\n').trim()
+      if (!fullCombinedReply) return
+
+      if (groupId && decision.reason === 'group_casual') gateway.recordCasualSpeech(groupId)
+
+      queueMicrotask(() =>
+        memory.recordTurn(
+          scopeKey,
+          userId,
+          targetMessage,
+          fullCombinedReply,
+          session.sender.nickname,
+          isMaster,
+          session.messageId
+        )
+      )
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       ctx.logger.error(`Failed to handle message: ${errorMsg}`)
-      if (isMaster && !groupId) await session.quick(`切，跟 Gemini 通讯翻车了：${errorMsg}。笨蛋主人快去排查一下～`) // TODO
+      if (isMaster && !groupId) await session.quick(`模型通讯失败: ${errorMsg}`)
     }
   }, 100)
 }

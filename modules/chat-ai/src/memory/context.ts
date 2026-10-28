@@ -1,16 +1,10 @@
 import type { MemoryNode, ProfileFactRecord } from './store'
 
-export interface BudgetConfig {
-  maxChars?: number
-}
-
 export function formatAndTruncateMemory(
   pyramidNodes: readonly MemoryNode[],
   profileFacts: readonly ProfileFactRecord[],
-  config: BudgetConfig = {}
+  maxChars?: number
 ): { memoryBlock: string; profileBlock: string } {
-  const maxChars = config.maxChars ?? 4000
-
   const profileBlock =
     profileFacts.length > 0
       ? `[USER_CORE_FACTS]\n${profileFacts
@@ -23,7 +17,7 @@ export function formatAndTruncateMemory(
   )
 
   let memoryBlock = memoryLines.length > 0 ? `[LONG_TERM_MEMORY_SUMMARIES]\n${memoryLines.join('\n')}` : ''
-  while (memoryLines.length > 2 && profileBlock.length + memoryBlock.length > maxChars) {
+  while (memoryLines.length > 2 && profileBlock.length + memoryBlock.length > (maxChars ?? 4000)) {
     memoryLines.pop()
     memoryBlock = `[LONG_TERM_MEMORY_SUMMARIES]\n${memoryLines.join('\n')}`
   }

@@ -56,7 +56,8 @@ export class GeminiClient {
     newMessage: string,
     abilityManager?: AbilityManager,
     abilityCtx?: AbilityContext,
-    maxLoops = 5
+    maxLoops = 5,
+    onImmediateText?: (text: string) => Promise<void>
   ): Promise<string> {
     const isMaster = abilityCtx?.isMaster ?? false
     const tools = abilityManager ? abilityManager.getGeminiFunctionDeclarations(isMaster) : []
@@ -87,7 +88,7 @@ export class GeminiClient {
         `Requesting <cyan>${this.modelName}</cyan> (loop <yellow>${loops}</yellow>, tools: <magenta>${tools.length}</magenta>, prompt: <yellow>${systemPrompt.length}</yellow> chars, input: <yellow>${newMessage.length}</yellow> chars)`
       )
 
-      while (retryCount < 2) {
+      while (retryCount < 3) {
         try {
           response = await this.ai.models.generateContent({
             model: this.modelName,
@@ -108,11 +109,12 @@ export class GeminiClient {
           break
         } catch (fetchErr) {
           retryCount++
+          const cause = fetchErr instanceof Error && 'cause' in fetchErr ? String(fetchErr.cause) : ''
           this.logger?.warn(
-            `API request attempt <yellow>${retryCount}</yellow> failed: <red>${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}</red>`
+            `API request attempt <yellow>${retryCount}</yellow> failed: <red>${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}</red>${cause ? ` (cause: ${cause})` : ''}`
           )
-          if (retryCount >= 2) throw fetchErr
-          await new Promise((r) => setTimeout(r, 1000))
+          if (retryCount >= 3) throw fetchErr
+          await new Promise((r) => setTimeout(r, 1500))
         }
       }
 
@@ -124,16 +126,17 @@ export class GeminiClient {
         return ''
       }
 
+      const candidate = response.candidates?.[0]
+      const textParts = candidate?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
+      const textResult =
+        textParts
+          .map((p) => p.text)
+          .join('')
+          .trim() ||
+        (response.text?.trim() ?? '')
+
       const functionCalls = response.functionCalls
       if (!functionCalls?.length || !abilityManager || !abilityCtx) {
-        const candidate = response.candidates?.[0]
-        const textParts = candidate?.content?.parts?.filter((p) => typeof p.text === 'string') ?? []
-        const textResult =
-          textParts
-            .map((p) => p.text)
-            .join('')
-            .trim() ||
-          (response.text?.trim() ?? '')
         if (!textResult) {
           const rawData = {
             candidates: response.candidates,
@@ -153,10 +156,17 @@ export class GeminiClient {
           }
         } else {
           this.logger?.info(
-            `Text generated in loop <yellow>${loops}</yellow> (<yellow>${loopDuration}ms</yellow>), response: <green>${textResult.length}</green> chars`
+            `Text generated in loop <yellow>${loops}</yellow> (<yellow>${loopDuration}ms</yellow>), response: <green>${textResult.length}</green> chars: ${textResult}`
           )
         }
         return textResult
+      }
+
+      if (textResult && onImmediateText) {
+        this.logger?.info(
+          `Early text emitted before tools in loop <yellow>${loops}</yellow> (<yellow>${loopDuration}ms</yellow>): ${textResult}`
+        )
+        await onImmediateText(textResult)
       }
 
       const callNames = functionCalls.map((c) => `<cyan>${c.name}</cyan>`).join(', ')
