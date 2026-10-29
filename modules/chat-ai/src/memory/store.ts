@@ -17,6 +17,10 @@ export interface MemoryNode {
   readonly createdAt: number
 }
 
+export const USER_DISLIKE_LEVELS = ['正常状态', '略微反感', '比较反感', '十分反感', '彻底无视'] as const
+
+export type UserDislikeLevelText = (typeof USER_DISLIKE_LEVELS)[number]
+
 export interface UserFact {
   readonly id?: number
   readonly userId: string
@@ -57,6 +61,23 @@ export class MemoryDatabase {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     this.db = new DatabaseSync(dbPath)
     this.initTables()
+  }
+
+  /**
+   * 事务执行器：封装 BEGIN TRANSACTION / COMMIT / ROLLBACK，确保批量写操作的原子性并大幅减少 fsync 磁盘 IO
+   */
+  public transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN TRANSACTION;')
+    try {
+      const result = fn()
+      this.db.exec('COMMIT;')
+      return result
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK;')
+      } catch {}
+      throw err
+    }
   }
 
   private initTables(): void {
@@ -159,37 +180,39 @@ export class MemoryDatabase {
   }
 
   public addNode(node: MemoryNode): number {
-    const stmt = this.db.prepare(
-      'INSERT INTO memory_nodes (level, scope_key, summary, tags, start_time, end_time, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )
-    const result = stmt.run(
-      node.level,
-      node.scopeKey,
-      node.summary,
-      node.tags ?? '',
-      node.startTime,
-      node.endTime,
-      node.createdAt ?? Date.now()
-    )
-    const newId = Number(result.lastInsertRowid)
+    return this.transaction(() => {
+      const stmt = this.db.prepare(
+        'INSERT INTO memory_nodes (level, scope_key, summary, tags, start_time, end_time, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      const result = stmt.run(
+        node.level,
+        node.scopeKey,
+        node.summary,
+        node.tags ?? '',
+        node.startTime,
+        node.endTime,
+        node.createdAt ?? Date.now()
+      )
+      const newId = Number(result.lastInsertRowid)
 
-    // 如果包含概念线索标签，顺藤摸瓜与历史节点自动织网连边
-    if (node.tags) {
-      const tagList = node.tags
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean)
-      for (const tag of tagList) {
-        const related = this.db
-          .prepare('SELECT id FROM memory_nodes WHERE id != ? AND tags LIKE ? ORDER BY end_time DESC LIMIT 2')
-          .all(newId, `%${tag}%`) as { id: number }[]
-        for (const target of related) {
-          this.linkNodes(newId, target.id, tag)
+      // 如果包含概念线索标签，顺藤摸瓜与历史节点自动织网连边
+      if (node.tags) {
+        const tagList = node.tags
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+        for (const tag of tagList) {
+          const related = this.db
+            .prepare('SELECT id FROM memory_nodes WHERE id != ? AND tags LIKE ? ORDER BY end_time DESC LIMIT 2')
+            .all(newId, `%${tag}%`) as { id: number }[]
+          for (const target of related) {
+            this.linkNodes(newId, target.id, tag)
+          }
         }
       }
-    }
 
-    return newId
+      return newId
+    })
   }
 
   public linkNodes(fromId: number, toId: number, concept: string): void {
@@ -267,27 +290,25 @@ export class MemoryDatabase {
   /**
    * 获取用户当前的坏感度等级（0: 正常状态, 1: 略微反感, 2: 比较反感, 3: 十分反感, 4: 彻底无视）
    */
-  public getUserDislikeLevel(userId: string): { level: number; statusText: string; reason: string } {
+  public getUserDislikeLevel(userId: string): { level: number; statusText: UserDislikeLevelText; reason: string } {
     const row = this.db
       .prepare('SELECT weight, fact FROM user_profiles WHERE user_id = ? AND category = ?')
       .get(userId, 'dislike') as { weight: number; fact: string } | undefined
 
-    const levelMap = ['正常状态', '略微反感', '比较反感', '十分反感', '彻底无视']
     if (!row) {
-      return { level: 0, statusText: '正常状态', reason: '' }
+      return { level: 0, statusText: USER_DISLIKE_LEVELS[0], reason: '' }
     }
     const level = Math.max(0, Math.min(4, row.weight))
-    return { level, statusText: levelMap[level] ?? '正常状态', reason: row.fact }
+    return { level, statusText: USER_DISLIKE_LEVELS[level] ?? USER_DISLIKE_LEVELS[0], reason: row.fact }
   }
 
   /**
    * 单向降低用户态度（只降不升，drop 一级，最高到 4 彻底无视）
    */
-  public demoteUserAttitude(userId: string, reason: string): { newLevel: number; statusText: string } {
+  public demoteUserAttitude(userId: string, reason: string): { newLevel: number; statusText: UserDislikeLevelText } {
     const current = this.getUserDislikeLevel(userId)
     const newLevel = Math.min(4, current.level + 1)
-    const levelMap = ['正常状态', '略微反感', '比较反感', '十分反感', '彻底无视']
-    const newStatusText = levelMap[newLevel] ?? '彻底无视'
+    const newStatusText = USER_DISLIKE_LEVELS[newLevel] ?? USER_DISLIKE_LEVELS[4]
     const factText = `【${newStatusText}】${reason}`
 
     const exists = this.db
@@ -321,9 +342,12 @@ export class MemoryDatabase {
     const allowed = Math.max(1, maxCount - 1)
     if (nonDislikeRows.length > allowed) {
       const idsToDelete = nonDislikeRows.slice(allowed).map((r) => r.id)
-      for (const id of idsToDelete) {
-        this.db.prepare('DELETE FROM user_profiles WHERE id = ?').run(id)
-      }
+      this.transaction(() => {
+        const delStmt = this.db.prepare('DELETE FROM user_profiles WHERE id = ?')
+        for (const id of idsToDelete) {
+          delStmt.run(id)
+        }
+      })
     }
   }
 
@@ -435,21 +459,23 @@ export class MemoryDatabase {
     senderName = '',
     messageId = ''
   ): void {
-    this.db
-      .prepare(
-        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(scopeKey, role, userId, senderName, content, messageId, Date.now())
-
-    // 保持每个 scope 最多保留 30 条最近消息
-    this.db
-      .prepare(`
-        DELETE FROM recent_messages
-        WHERE scope_key = ? AND id NOT IN (
-          SELECT id FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT 30
+    this.transaction(() => {
+      this.db
+        .prepare(
+          'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
         )
-      `)
-      .run(scopeKey, scopeKey)
+        .run(scopeKey, role, userId, senderName, content, messageId, Date.now())
+
+      // 保持每个 scope 最多保留 30 条最近消息
+      this.db
+        .prepare(`
+          DELETE FROM recent_messages
+          WHERE scope_key = ? AND id NOT IN (
+            SELECT id FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT 30
+          )
+        `)
+        .run(scopeKey, scopeKey)
+    })
   }
 
   public findMessageByMessageId(
