@@ -240,6 +240,13 @@ export class HierarchicalMemoryService {
   }
 
   /**
+   * 获取对话者的坏感度态度等级与描述（单独独立抽象查询，与普通画像事实彻底解耦）
+   */
+  public getUserAttitude(userId: string): { level: number; statusText: string; reason: string } {
+    return this.db.getUserDislikeLevel(userId)
+  }
+
+  /**
    * 熔断自愈：从短期滑窗和持久化最近消息表中剔除最近一条可疑的用户入站消息，解除 PROHIBITED_CONTENT 死锁
    */
   public purgeSuspiciousUserMessage(scopeKey: string): void {

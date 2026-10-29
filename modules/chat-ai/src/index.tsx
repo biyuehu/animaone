@@ -229,6 +229,12 @@ export function main(ctx: Context, cfg: Config) {
           extraContexts.push(`【夜间梦境灵感】昨夜产生了以下顿悟或梦境灵感：“${dream}”。契合时可向主人分享。`)
         }
       } else {
+        const attitude = memory.getUserAttitude(`${adapter.identity}:${userId}`)
+        if (attitude.level > 0) {
+          extraContexts.push(
+            `【对当前对话者的态度】为${attitude.statusText}(警惕度: ${attitude.level}/4)${attitude.reason ? `，降级原因：“${attitude.reason}”` : ''}。态度会决定你的回复言语乃至沉默忽视情况`
+          )
+        }
         extraContexts.push(
           '【关于当前对话者的画像】',
           ...memory.assemblePromptContext(scopeKey, `${adapter.identity}:${userId}`)

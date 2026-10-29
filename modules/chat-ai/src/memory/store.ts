@@ -288,7 +288,7 @@ export class MemoryDatabase {
   }
 
   /**
-   * 获取用户当前的坏感度等级（0: 正常状态, 1: 略微反感, 2: 比较反感, 3: 十分反感, 4: 彻底无视）
+   * 获取用户当前的坏感度等级
    */
   public getUserDislikeLevel(userId: string): { level: number; statusText: UserDislikeLevelText; reason: string } {
     const row = this.db
@@ -303,7 +303,7 @@ export class MemoryDatabase {
   }
 
   /**
-   * 单向降低用户态度（只降不升，drop 一级，最高到 4 彻底无视）
+   * 单向降低用户态度
    */
   public demoteUserAttitude(userId: string, reason: string): { newLevel: number; statusText: UserDislikeLevelText } {
     const current = this.getUserDislikeLevel(userId)
@@ -372,12 +372,12 @@ export class MemoryDatabase {
     visibilityFilter?: 'public' | 'private'
   ): ProfileFactRecord[] {
     const query = visibilityFilter
-      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
-      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND category != ? AND visibility = ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND category != ? ORDER BY weight DESC, updated_at DESC LIMIT ?'
 
     return (visibilityFilter
-      ? this.db.prepare(query).all(userId, visibilityFilter, limit)
-      : this.db.prepare(query).all(userId, limit)) as unknown as ProfileFactRecord[]
+      ? this.db.prepare(query).all(userId, 'dislike', visibilityFilter, limit)
+      : this.db.prepare(query).all(userId, 'dislike', limit)) as unknown as ProfileFactRecord[]
   }
 
   public getProfileFacts(userId: string, limit: number, visibilityFilter?: 'public' | 'private'): string[] {
@@ -422,12 +422,12 @@ export class MemoryDatabase {
     visibilityFilter?: 'public' | 'private'
   ): ProfileFactRecord[] {
     const baseQuery = visibilityFilter
-      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND visibility = ? ORDER BY updated_at DESC LIMIT 100'
-      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100'
+      ? 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND category != ? AND visibility = ? ORDER BY updated_at DESC LIMIT 100'
+      : 'SELECT id, user_id as userId, fact, category, visibility, source_scope as sourceScope, source_context as sourceContext, weight, updated_at as updatedAt FROM user_profiles WHERE user_id = ? AND category != ? ORDER BY updated_at DESC LIMIT 100'
 
     const rows = (visibilityFilter
-      ? this.db.prepare(baseQuery).all(userId, visibilityFilter)
-      : this.db.prepare(baseQuery).all(userId)) as unknown as ProfileFactRecord[]
+      ? this.db.prepare(baseQuery).all(userId, 'dislike', visibilityFilter)
+      : this.db.prepare(baseQuery).all(userId, 'dislike')) as unknown as ProfileFactRecord[]
 
     if (rows.length === 0) return []
 
