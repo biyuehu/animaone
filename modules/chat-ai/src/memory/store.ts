@@ -461,6 +461,21 @@ export class MemoryDatabase {
   }
 
   /**
+   * 移除特定会话 scope 下最近的一条用户消息（用于违规内容熔断自愈，防止污染历史会话）
+   */
+  public removeLastUserMessage(scopeKey: string): boolean {
+    const lastUserRow = this.db
+      .prepare('SELECT id FROM recent_messages WHERE scope_key = ? AND role = ? ORDER BY id DESC LIMIT 1')
+      .get(scopeKey, 'user') as { id: number } | undefined
+
+    if (lastUserRow) {
+      this.db.prepare('DELETE FROM recent_messages WHERE id = ?').run(lastUserRow.id)
+      return true
+    }
+    return false
+  }
+
+  /**
    * 调取跨会话/跨平台的全局最新近期原话（不依赖满10轮压缩）
    */
   public getGlobalRecentMessages(

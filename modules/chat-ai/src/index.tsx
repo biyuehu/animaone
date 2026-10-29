@@ -299,21 +299,51 @@ export function main(ctx: Context, cfg: Config) {
       let hasSentImmediate = false
       const allEmittedTexts: string[] = []
 
-      const reply = await geminiClient.chat(
-        systemPrompt,
-        memory.getShortTerm(scopeKey, masterId),
-        groupId
-          ? `${timeTag} [${isMaster ? 'MASTER' : 'MEMBER'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
-          : `${timeTag} ${targetMessage}`,
-        abilityManager,
-        abilityCtx,
-        cfg.maxToolLoops,
-        async (earlyText) => {
-          hasSentImmediate = true
-          allEmittedTexts.push(earlyText)
-          await sendBotSpeech(earlyText, true)
+      let reply: string
+      try {
+        reply = await geminiClient.chat(
+          systemPrompt,
+          memory.getShortTerm(scopeKey, masterId),
+          groupId
+            ? `${timeTag} [${isMaster ? 'MASTER' : 'MEMBER'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
+            : `${timeTag} ${targetMessage}`,
+          abilityManager,
+          abilityCtx,
+          cfg.maxToolLoops,
+          async (earlyText) => {
+            hasSentImmediate = true
+            allEmittedTexts.push(earlyText)
+            await sendBotSpeech(earlyText, true)
+          }
+        )
+      } catch (chatErr) {
+        if (chatErr instanceof Error && chatErr.message === 'PROHIBITED_CONTENT') {
+          ctx.logger.warn(
+            `<red>[Circuit Breaker]</red> PROHIBITED_CONTENT detected for scope <blue>${scopeKey}</blue>. Purging suspicious last inbound message and retrying...`
+          )
+          // 熔断自愈：从短期滑窗和数据库中剔除最近可疑入站消息
+          memory.purgeSuspiciousUserMessage(scopeKey)
+
+          // 降级重试：以安全无害的占位降级提问重试，引导模型平稳过渡而不致会话死锁瘫痪
+          const sanitizedPrompt =
+            '刚才的消息因包含潜在违规词或敏感信息被系统阻断。请简短友善地回应提示“此内容暂无法回应，请换个话题吧”，不要复述违规内容。'
+          reply = await geminiClient.chat(
+            systemPrompt,
+            memory.getShortTerm(scopeKey, masterId),
+            `${timeTag} ${sanitizedPrompt}`,
+            abilityManager,
+            abilityCtx,
+            1,
+            async (earlyText) => {
+              hasSentImmediate = true
+              allEmittedTexts.push(earlyText)
+              await sendBotSpeech(earlyText, true)
+            }
+          )
+        } else {
+          throw chatErr
         }
-      )
+      }
 
       ctx.logger.info(
         `Session round finished in <yellow>${Date.now() - startTime}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`

@@ -237,4 +237,12 @@ export class HierarchicalMemoryService {
     )
     return [profileBlock].filter(Boolean)
   }
+
+  /**
+   * 熔断自愈：从短期滑窗和持久化最近消息表中剔除最近一条可疑的用户入站消息，解除 PROHIBITED_CONTENT 死锁
+   */
+  public purgeSuspiciousUserMessage(scopeKey: string): void {
+    this.slidingWindow.removeLastUserMessage(scopeKey)
+    this.db.removeLastUserMessage(scopeKey)
+  }
 }

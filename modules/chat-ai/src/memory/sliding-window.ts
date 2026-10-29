@@ -97,4 +97,16 @@ export class SlidingWindowMemory {
   public clear(scopeKey: string): void {
     this.history.delete(scopeKey)
   }
+
+  public removeLastUserMessage(scopeKey: string): boolean {
+    const list = this.history.get(scopeKey)
+    if (!list || list.length === 0) return false
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.role === 'user') {
+        list.splice(i, 1)
+        return true
+      }
+    }
+    return false
+  }
 }

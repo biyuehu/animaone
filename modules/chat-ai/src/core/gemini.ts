@@ -153,6 +153,7 @@ export class GeminiClient {
                 `--- [System Prompt] ---\n${systemPrompt}\n` +
                 `--- [Contents (History + Input)] ---\n${JSON.stringify(contents, null, 2)}`
             )
+            throw new Error('PROHIBITED_CONTENT')
           }
         } else {
           this.logger?.info(

@@ -123,4 +123,15 @@ flowchart TD
 | `summaryInterval` | `number` | `10` | 自动触发长期记忆归档与提炼的交互轮次间隔 |
 | `summaryCharLimit` | `number` | `1500` | 群聊累计字符数超限自动提前触发归档总结的字数阈值 |
 | `idleCompactTimeout` | `number` | `300` | 群聊无活动自动触发记忆压缩的空闲秒数 |
-| `activeMemoryCapacity` | `number` | `15` | 组装上下文时最多召回的用户画像事实�
+| `activeMemoryCapacity` | `number` | `15` | 组装上下文时最多召回的用户画像事实条数 |
+| `enableDreamReflection` | `boolean` | `true` | 是否开启凌晨闲暇做梦灵感推演 |
+| `maxToolLoops` | `number` | `10` | 单次交互中允许大模型连续调用工具的最大循环跳数 |
+
+---
+
+## 开发与构建
+
+```bash
+bun fix
+pnpm run build
+```
