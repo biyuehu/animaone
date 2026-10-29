@@ -5,6 +5,7 @@
  */
 export function sanitizeCqCodes(message: string): string {
   return message
+    .replace(/\[CQ:reply,id=-?\d+\]/gi, '')
     .replace(/\[CQ:image,[^\]]*\]/gi, (match) => {
       const summaryMatch = match.match(/summary=([^,\]]+)/i)
       return summaryMatch ? `[图片:${summaryMatch[1].replace(/&#91;/g, '[').replace(/&#93;/g, ']')}]` : '[图片]'
@@ -80,10 +81,11 @@ export class MessageGateway {
       return rejectedDecision('platform_rejected')
 
     if (!groupId) {
+      const replyId = rawMessage.match(/\[CQ:reply,id=(-?\d+)\]/i)?.[1]
       if (masterId && String(userId) === String(masterId))
-        return allowedDecision('master_direct', sanitizeCqCodes(rawMessage))
+        return allowedDecision('master_direct', sanitizeCqCodes(rawMessage), false, replyId)
       return this.config.allowFriendPrivate
-        ? allowedDecision('friend_direct', sanitizeCqCodes(rawMessage))
+        ? allowedDecision('friend_direct', sanitizeCqCodes(rawMessage), false, replyId)
         : rejectedDecision('rejected')
     }
 
@@ -100,7 +102,7 @@ export class MessageGateway {
     this.recentMsgTimestamps.set(groupId, timestamps)
     const isChatBurst = timestamps.length >= this.config.burstThreshold
 
-    const replyId = rawMessage.match(/\[CQ:reply,id=(\d+)\]/i)?.[1]
+    const replyId = rawMessage.match(/\[CQ:reply,id=(-?\d+)\]/i)?.[1]
 
     const atCq = botSelfId ? `[CQ:at,qq=${botSelfId}]` : ''
     if (
@@ -109,7 +111,7 @@ export class MessageGateway {
       botNames.some((name) => rawMessage.includes(name) || rawMessage.includes(`@${name}`))
     ) {
       let cleaned = rawMessage
-        .replace(/\[CQ:reply,id=\d+\]/gi, '')
+        .replace(/\[CQ:reply,id=-?\d+\]/gi, '')
         .replaceAll(atCq, '')
         .replaceAll(`@${botSelfId}`, '')
       for (const name of botNames) cleaned = cleaned.replaceAll(`@${name}`, '')

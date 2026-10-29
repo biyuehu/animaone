@@ -106,9 +106,11 @@ export class MemoryDatabase {
         user_id TEXT DEFAULT '',
         sender_name TEXT DEFAULT '',
         content TEXT NOT NULL,
+        message_id TEXT DEFAULT '',
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_recent_scope ON recent_messages(scope_key);
+      CREATE INDEX IF NOT EXISTS idx_recent_message_id ON recent_messages(message_id);
 
       -- 插件系统元数据表（存储首次启动时间等核心档案）
       CREATE TABLE IF NOT EXISTS bot_metadata (
@@ -127,6 +129,16 @@ export class MemoryDatabase {
     try {
       this.db.exec(`
         ALTER TABLE recent_messages ADD COLUMN sender_name TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        ALTER TABLE recent_messages ADD COLUMN message_id TEXT DEFAULT '';
+      `)
+    } catch {}
+    try {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_recent_message_id ON recent_messages(message_id);
       `)
     } catch {}
     try {
@@ -420,13 +432,14 @@ export class MemoryDatabase {
     role: 'user' | 'model',
     content: string,
     userId = '',
-    senderName = ''
+    senderName = '',
+    messageId = ''
   ): void {
     this.db
       .prepare(
-        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO recent_messages (scope_key, role, user_id, sender_name, content, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(scopeKey, role, userId, senderName, content, Date.now())
+      .run(scopeKey, role, userId, senderName, content, messageId, Date.now())
 
     // 保持每个 scope 最多保留 30 条最近消息
     this.db
@@ -439,10 +452,24 @@ export class MemoryDatabase {
       .run(scopeKey, scopeKey)
   }
 
+  public findMessageByMessageId(
+    scopeKey: string,
+    messageId: string
+  ): { role: string; content: string; senderName: string; userId: string } | null {
+    if (!messageId) return null
+    const row = this.db
+      .prepare(
+        'SELECT role, content, sender_name as senderName, user_id as userId FROM recent_messages WHERE scope_key = ? AND message_id = ? ORDER BY id DESC LIMIT 1'
+      )
+      .get(scopeKey, messageId) as { role: string; content: string; senderName: string; userId: string } | undefined
+
+    return row ?? null
+  }
+
   public loadRecentMessages(scopeKey: string, limit: number): ChatMessage[] {
     const rows = this.db
       .prepare(
-        'SELECT role, content, user_id as userId, sender_name as senderName, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
+        'SELECT role, content, user_id as userId, sender_name as senderName, message_id as messageId, created_at as timestamp FROM recent_messages WHERE scope_key = ? ORDER BY id DESC LIMIT ?'
       )
       .all(scopeKey, limit) as {
       role: 'user' | 'model'
@@ -450,13 +477,14 @@ export class MemoryDatabase {
       timestamp: number
       userId: string
       senderName: string
+      messageId?: string
     }[]
     return rows
       .reverse()
       .map((r) =>
         r.role === 'model'
-          ? modelMessage(r.content, r.timestamp)
-          : userMessage(r.content, r.userId, r.senderName, r.timestamp)
+          ? modelMessage(r.content, r.timestamp, r.messageId ?? '')
+          : userMessage(r.content, r.userId, r.senderName, r.timestamp, r.messageId ?? '')
       )
   }
 

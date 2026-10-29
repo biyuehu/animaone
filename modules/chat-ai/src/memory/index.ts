@@ -65,7 +65,7 @@ export class HierarchicalMemoryService {
   ): void {
     if (!content.trim()) return
     this.slidingWindow.addMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
-    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName)
+    this.db.saveRecentMessage(scopeKey, 'user', content.trim(), userId, senderName, messageId)
   }
 
   /**
@@ -87,7 +87,7 @@ export class HierarchicalMemoryService {
     this.slidingWindow.addMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
     this.slidingWindow.addMessage(scopeKey, 'model', modelMsg)
 
-    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName)
+    this.db.saveRecentMessage(scopeKey, 'user', userMsg, userId, senderName, messageId)
     this.db.saveRecentMessage(scopeKey, 'model', modelMsg)
 
     // 1. 维护会话事件缓冲区
@@ -143,7 +143,9 @@ export class HierarchicalMemoryService {
     scopeKey: string,
     messageId: string
   ): { role: string; content: string; senderName: string; userId: string } | null {
-    return this.slidingWindow.findMessageByMessageId(scopeKey, messageId)
+    const memoryHit = this.slidingWindow.findMessageByMessageId(scopeKey, messageId)
+    if (memoryHit) return memoryHit
+    return this.db.findMessageByMessageId(scopeKey, messageId)
   }
 
   public async triggerDream(masterId: string): Promise<DreamReflectionResult | null> {
@@ -164,7 +166,6 @@ export class HierarchicalMemoryService {
 
     for (const [scopeKey, chatList] of this.activeChatBuffer.entries()) {
       if (chatList.length === 0) continue
-      // 好友私聊不进行空闲归档
       if (parseScopeKey(scopeKey).type === 'private' && !scopeKey.includes(':private:master')) continue
 
       if (now - (chatList[chatList.length - 1]?.timestamp ?? 0) >= this.idleCompactTimeout * 1000) {
