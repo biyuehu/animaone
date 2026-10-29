@@ -100,7 +100,11 @@ export class HierarchicalMemoryService {
     const chatCount = (this.uncommittedChatCount.get(scopeKey) ?? 0) + 1
     this.uncommittedChatCount.set(scopeKey, chatCount)
 
+    // 普通好友私聊不建立长期事件节点（memory_nodes），仅群聊与主人会话执行宏观事件提炼
+    const isFriendPrivate = !isMaster && parseScopeKey(scopeKey).type === 'private'
+
     if (
+      !isFriendPrivate &&
       (chatCount >= this.summaryInterval ||
         chatList.reduce((sum, item) => sum + item.content.length, 0) >= this.summaryCharLimit) &&
       this.summarizer
@@ -160,6 +164,9 @@ export class HierarchicalMemoryService {
 
     for (const [scopeKey, chatList] of this.activeChatBuffer.entries()) {
       if (chatList.length === 0) continue
+      // 好友私聊不进行空闲归档
+      if (parseScopeKey(scopeKey).type === 'private' && !scopeKey.includes(':private:master')) continue
+
       if (now - (chatList[chatList.length - 1]?.timestamp ?? 0) >= this.idleCompactTimeout * 1000) {
         this.uncommittedChatCount.set(scopeKey, 0)
         const bufferToCompact = [...chatList]

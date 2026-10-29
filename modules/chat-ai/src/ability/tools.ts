@@ -23,7 +23,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
     toolDefinition: {
       masterOnly: true,
       parameters: { type: 'OBJECT', properties: {} },
-      execute: async (_args, ctx: AbilityContext) => {
+      execute: async () => {
         const now = Date.now()
         const elapsed = (now - lastDreamTime) / 1000
         if (elapsed < cooldownSeconds) {
@@ -35,7 +35,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
         }
 
         lastDreamTime = now
-        const res = await memory.triggerDream(ctx.userId)
+        const res = await memory.triggerDream('__master__')
         if (!res) {
           return {
             success: false,
@@ -133,6 +133,57 @@ export function createWebSearchOrFetchAbility(proxy?: string): Ability {
           }
 
         return { error: '必须提供 url 或 query 参数' }
+      }
+    }
+  }
+}
+
+export function createDemoteUserAttitudeAbility(
+  memory: HierarchicalMemoryService,
+  logger?: { info: (msg: string) => void }
+): Ability {
+  return {
+    name: 'demote_user_attitude',
+    description:
+      '降低对特定用户的态度等级。为单向降级惩罚，不可因一句话就轻易惩罚。当对话者或群聊中某成员言语恶劣无礼、进行人身攻击、恶意骚扰或试图破坏规则时自主调用。若达到彻底无视，系统将对其进行物理静默拦截。严禁滥用。',
+    toolDefinition: {
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          targetUserId: {
+            type: 'STRING',
+            description: '目标用户的数字 ID。若不填则默认为当前对话者。在群聊中若针对特定群成员降级，请传入该成员的 ID'
+          },
+          reason: {
+            type: 'STRING',
+            description: '判定降级的客观理由与事实依据（例如：多次进行污言秽语人身攻击）'
+          }
+        },
+        required: ['reason']
+      },
+      execute: async (args: { targetUserId?: string; reason: string }, ctx: AbilityContext) => {
+        const rawTargetId = (args.targetUserId ?? ctx.userId ?? '').trim()
+        if (!rawTargetId) return { success: false, error: 'MISSING_USER_ID', message: '未能定位目标用户' }
+
+        if (rawTargetId === '__master__' || (ctx.isMaster && rawTargetId === ctx.userId)) {
+          return { success: false, error: 'INVALID_TARGET', message: '严禁对主人调用态度降级' }
+        }
+
+        const scopedUserId = `${ctx.identity}:${rawTargetId}`
+        const db = memory.getDatabase()
+        const res = db.demoteUserAttitude(scopedUserId, args.reason.trim())
+
+        logger?.info(
+          `[Attitude Demoted] User ${rawTargetId} (identity: ${ctx.identity}) demoted to [${res.statusText}] (level ${res.newLevel}), reason: "${args.reason.trim()}"`
+        )
+
+        return {
+          success: true,
+          targetUserId: rawTargetId,
+          newLevel: res.newLevel,
+          statusText: res.statusText,
+          message: `已成功将用户 ${rawTargetId} 的态度降级为【${res.statusText}】。`
+        }
       }
     }
   }

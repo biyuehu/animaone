@@ -4,6 +4,7 @@ import { type AdapterConfig, type Api, type Context, Messages, Symbols, sleep, T
 import { AbilityManager } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
+  createDemoteUserAttitudeAbility,
   createDreamReflectionAbility,
   createKotoriMessagingAbility,
   createRememberAbility,
@@ -17,11 +18,12 @@ import {
 import {
   DEFAULT_BASE_PERSONA,
   DEFAULT_BOT_NAMES,
+  DEFAULT_FRIEND_PRIVATE,
+  DEFAULT_IDENTITY_ASPECTS,
   DEFAULT_MASTER_GROUP,
   DEFAULT_MASTER_NICK,
   DEFAULT_MASTER_PRIVATE,
-  DEFAULT_MEMBER_GROUP,
-  DEFAULT_PLATFORM_ASPECTS
+  DEFAULT_MEMBER_GROUP
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
@@ -33,8 +35,12 @@ export const config = Tsu.Object({
   apiKey: Tsu.String().describe('Google Gemini API Key'),
   modelName: Tsu.String().default('gemini-3.5-flash-lite').describe('使用的 Gemini 模型名称'),
   proxy: Tsu.String().optional().describe('网络代理地址（如 http://127.0.0.1:2333）'),
-  whitelistedGroups: Tsu.Array(Tsu.String()).default([]).describe('启用群聊感知的白名单群号列表'),
-  allowedPlatforms: Tsu.Array(Tsu.String()).default(['cmd', 'onebot']).describe('允许响应用于交互的平台列表'),
+  whitelistedGroups: Tsu.Array(Tsu.String())
+    .default([])
+    .describe('启用群聊感知的白名单群号列表（支持纯群号、platform:群号、identity:群号）'),
+  allowedInstances: Tsu.Array(Tsu.String())
+    .default([])
+    .describe('允许响应用于交互的实例 identity 列表（留空则不限制全部放行）'),
   groupActiveRate: Tsu.Number().range(0, 1).default(0.05).describe('群聊日常偶发插话/接梗的主动回复概率 (0~1)'),
   botNames: Tsu.Array(Tsu.String()).default(DEFAULT_BOT_NAMES).describe('机器人名称列表，第一个为默认名'),
   masterNick: Tsu.String().default(DEFAULT_MASTER_NICK).describe('对主人的默认基础称呼'),
@@ -42,13 +48,15 @@ export const config = Tsu.Object({
   masterPrivate: Tsu.String().default(DEFAULT_MASTER_PRIVATE).describe('面对主人私聊时的补充人设'),
   masterGroup: Tsu.String().default(DEFAULT_MASTER_GROUP).describe('在群聊中与主人对话时的补充人设'),
   memberGroup: Tsu.String().default(DEFAULT_MEMBER_GROUP).describe('在群聊中与普通群成员对话时的补充人设'),
-  platformAspects: Tsu.Custom<Record<string, string>>((x) => {
+  friendPrivate: Tsu.String().default(DEFAULT_FRIEND_PRIVATE).describe('在私聊中与好友对话时的补充人设'),
+  allowFriendPrivate: Tsu.Boolean().default(true).describe('是否允许普通好友私聊交互'),
+  identityAspects: Tsu.Custom<Record<string, string>>((x) => {
     if (!x || typeof x !== 'object') return false
     for (const v of Object.values(x)) if (typeof v !== 'string') return false
     return true
   })
-    .default(DEFAULT_PLATFORM_ASPECTS)
-    .describe('各平台专属特质与风格映射'),
+    .default(DEFAULT_IDENTITY_ASPECTS)
+    .describe('各实例专属特质与风格切面映射'),
   enableHumanDelay: Tsu.Boolean().default(true).describe('是否开启模拟人类打字延迟'),
   splitThreshold: Tsu.Number().default(120).describe('长回复整体发送不拆条的字符长度阈值'),
   trailingBracketRate: Tsu.Number().range(0, 1).default(0.08).describe('短句末尾随机添加半括号（）的拟人概率'),
@@ -73,9 +81,10 @@ export function main(ctx: Context, cfg: Config) {
   const gateway = new MessageGateway({
     whitelistedGroups: cfg.whitelistedGroups,
     groupActiveRate: cfg.groupActiveRate,
-    allowedPlatforms: cfg.allowedPlatforms,
+    allowedInstances: cfg.allowedInstances,
     followupWindow: cfg.followupWindow,
-    burstThreshold: cfg.burstThreshold
+    burstThreshold: cfg.burstThreshold,
+    allowFriendPrivate: cfg.allowFriendPrivate
   })
 
   const geminiClient = new GeminiClient({
@@ -104,6 +113,7 @@ export function main(ctx: Context, cfg: Config) {
   const abilityManager = new AbilityManager(ctx.logger)
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
+  abilityManager.register(createDemoteUserAttitudeAbility(memory, ctx.logger))
   abilityManager.register(createSearchMasterOmniscientMemoriesAbility(memory))
   abilityManager.register(createSearchChannelPublicMemoriesAbility(memory))
   abilityManager.register(createDreamReflectionAbility(memory, cfg.dreamCooldown))
@@ -159,11 +169,22 @@ export function main(ctx: Context, cfg: Config) {
     const isMaster = Boolean(masterId) && userId === masterId
     const groupId = session.groupId ? String(session.groupId) : undefined
 
+    if (!isMaster) {
+      const userDislike = memory.getDatabase().getUserDislikeLevel(`${adapter.identity}:${userId}`)
+      if (userDislike.level >= 4) {
+        ctx.logger.info(
+          `<yellow>[Physical Block]</yellow> User <cyan>${userId}</cyan> (identity: ${adapter.identity}) blocked due to attitude level 4 (ignored)`
+        )
+        return next()
+      }
+    }
+
     const decision = gateway.evaluate(
       userId,
       groupId,
       rawMessage,
       adapter.platform,
+      adapter.identity,
       masterId,
       adapter.selfId,
       cfg.botNames
@@ -172,10 +193,12 @@ export function main(ctx: Context, cfg: Config) {
       if (
         groupId &&
         decision.reason !== 'platform_rejected' &&
-        (cfg.whitelistedGroups.includes(groupId) || cfg.whitelistedGroups.includes(`${adapter.platform}:${groupId}`))
+        (cfg.whitelistedGroups.includes(groupId) ||
+          cfg.whitelistedGroups.includes(`${adapter.platform}:${groupId}`) ||
+          cfg.whitelistedGroups.includes(`${adapter.identity}:${groupId}`))
       )
         memory.recordPassiveMessage(
-          formatScopeKey(groupScope(adapter.platform, groupId)),
+          formatScopeKey(groupScope(adapter.identity, groupId)),
           userId,
           sanitizeCqCodes(rawMessage),
           session.sender.nickname,
@@ -193,18 +216,24 @@ export function main(ctx: Context, cfg: Config) {
 
     try {
       const scopeKey = formatScopeKey(
-        groupId ? groupScope(adapter.platform, groupId) : privateScope(adapter.platform, userId)
+        groupId ? groupScope(adapter.identity, groupId) : privateScope(adapter.identity, userId)
       )
       const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isMaster }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-      extraContexts.push(...memory.assemblePromptContext(scopeKey, '__master__', isMaster ? undefined : 'public'))
 
       if (isMaster) {
+        extraContexts.push(`【关于主人的画像】`, ...memory.assemblePromptContext(scopeKey, '__master__'))
         const dream = memory.consumePendingDream()
         if (dream) {
           ctx.logger.info(`Consumed pending dream reflection for master: "${dream}"`)
           extraContexts.push(`【夜间梦境灵感】昨夜产生了以下顿悟或梦境灵感：“${dream}”。契合时可向主人分享。`)
         }
+      } else {
+        extraContexts.push(
+          '【关于当前对话者的画像】',
+          ...memory.assemblePromptContext(scopeKey, `${adapter.identity}:${userId}`)
+        )
+        extraContexts.push('【关于主人的公开画像】', ...memory.assemblePromptContext(scopeKey, '__master__', 'public'))
       }
 
       if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
@@ -228,8 +257,9 @@ export function main(ctx: Context, cfg: Config) {
       )
 
       const startTime = Date.now()
+      const userRole = isMaster ? 'MASTER' : groupId ? 'MEMBER' : 'FRIEND'
       ctx.logger.info(
-        `Received message [type: <magenta>${decision.reason}</magenta>] from <cyan>${isMaster ? 'MASTER' : 'USER'}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
+        `Received message [type: <magenta>${decision.reason}</magenta>] from <cyan>${userRole}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
       )
 
       const now = new Date()

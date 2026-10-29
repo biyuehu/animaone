@@ -36,13 +36,15 @@ export function buildSystemPrompt(
     `【核心灵魂人格】`,
     `对主人的默认基础称呼：${config.masterNick}（如果在下方【核心事实】中有主人最新要求或约定的具体称呼，必须优先遵从最新记忆事实）`,
     replacePlaceholders(config.basePersona),
-    config.platformAspects[runtime.platform] ? replacePlaceholders(config.platformAspects[runtime.platform]) : null,
+    config.identityAspects[runtime.identity] ? replacePlaceholders(config.identityAspects[runtime.identity]) : null,
     replacePlaceholders(
       runtime.isMaster
         ? runtime.groupId
-          ? `【面对唯一的主人】\n${config.masterGroup}`
-          : `【群聊环境-正在与你唯一主人对话】\n${config.masterPrivate}`
-        : `【群聊环境-正在与群成员对话】\n${config.memberGroup}`
+          ? `【群聊环境-与唯一主人对话】\n${config.masterGroup}`
+          : `【私聊环境-与唯一主人对话】\n${config.masterPrivate}`
+        : runtime.groupId
+          ? `【群聊环境-与群成员对话】\n${config.memberGroup}`
+          : `【私聊环境-与好友对话】\n${config.friendPrivate}`
     ),
     [
       '【基础感知】',
@@ -51,11 +53,11 @@ export function buildSystemPrompt(
       `诞生天数：${Math.floor((now.getTime() - runtime.birthTime) / (1000 * 60 * 60 * 24))}`,
       `平台实例名字：${runtime.identity}`,
       `接入平台：${runtime.platform}`,
-      `对话环境：${runtime.groupId ? `公开群聊 (群 ID：${runtime.groupId})` : '私聊环境'}`,
+      `对话环境：${runtime.groupId ? `群聊 (群 ID：${runtime.groupId})` : '私聊'}`,
       runtime.groupId
-        ? '【群聊公屏流提示】上下文中带有 [MEMBER: 昵称] 或 [MASTER: 昵称] 是你在群内旁听到的不同群成员真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
+        ? '【群聊公屏流提示】上下文中带有 [成员: 昵称] 或 [主人: 昵称] 是你在群内旁听到的不同群成员真实公屏发言，你可以随时结合这些前文信息接梗、吐槽、回答或概括'
         : null,
-      `当前对话者身份：${runtime.isMaster ? '主人' : '群成员'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
+      `当前对话者身份：${runtime.isMaster ? '主人' : runtime.groupId ? '群成员' : '好友'} | 昵称：${runtime.senderName} | ID：${runtime.userId}`
     ]
       .filter(Boolean)
       .join('\n'),

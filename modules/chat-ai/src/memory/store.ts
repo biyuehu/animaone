@@ -21,7 +21,7 @@ export interface UserFact {
   readonly id?: number
   readonly userId: string
   readonly fact: string
-  readonly category: 'preference' | 'identity' | 'event' | 'relation'
+  readonly category: 'preference' | 'identity' | 'event' | 'relation' | 'dislike'
   readonly weight: number
   readonly updatedAt: number
 }
@@ -231,7 +231,7 @@ export class MemoryDatabase {
   public upsertFact(
     userId: string,
     fact: string,
-    category: 'preference' | 'identity' | 'event' | 'relation',
+    category: 'preference' | 'identity' | 'event' | 'relation' | 'dislike',
     visibility: 'public' | 'private',
     sourceScope?: string,
     sourceContext?: string
@@ -249,6 +249,69 @@ export class MemoryDatabase {
           'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, source_context, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
         )
         .run(userId, fact, category, visibility, sourceScope ?? '', sourceContext ?? '', Date.now())
+    }
+  }
+
+  /**
+   * 获取用户当前的坏感度等级（0: 正常状态, 1: 略微反感, 2: 比较反感, 3: 十分反感, 4: 彻底无视）
+   */
+  public getUserDislikeLevel(userId: string): { level: number; statusText: string; reason: string } {
+    const row = this.db
+      .prepare('SELECT weight, fact FROM user_profiles WHERE user_id = ? AND category = ?')
+      .get(userId, 'dislike') as { weight: number; fact: string } | undefined
+
+    const levelMap = ['正常状态', '略微反感', '比较反感', '十分反感', '彻底无视']
+    if (!row) {
+      return { level: 0, statusText: '正常状态', reason: '' }
+    }
+    const level = Math.max(0, Math.min(4, row.weight))
+    return { level, statusText: levelMap[level] ?? '正常状态', reason: row.fact }
+  }
+
+  /**
+   * 单向降低用户态度（只降不升，drop 一级，最高到 4 彻底无视）
+   */
+  public demoteUserAttitude(userId: string, reason: string): { newLevel: number; statusText: string } {
+    const current = this.getUserDislikeLevel(userId)
+    const newLevel = Math.min(4, current.level + 1)
+    const levelMap = ['正常状态', '略微反感', '比较反感', '十分反感', '彻底无视']
+    const newStatusText = levelMap[newLevel] ?? '彻底无视'
+    const factText = `【${newStatusText}】${reason}`
+
+    const exists = this.db
+      .prepare('SELECT id FROM user_profiles WHERE user_id = ? AND category = ?')
+      .get(userId, 'dislike') as { id: number } | undefined
+
+    if (exists) {
+      this.db
+        .prepare('UPDATE user_profiles SET weight = ?, fact = ?, updated_at = ? WHERE id = ?')
+        .run(newLevel, factText, Date.now(), exists.id)
+    } else {
+      this.db
+        .prepare(
+          'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(userId, factText, 'dislike', 'private', 'attitude', newLevel, Date.now())
+    }
+
+    return { newLevel, statusText: newStatusText }
+  }
+
+  /**
+   * 修剪普通用户的陈旧事实，保留最多 maxCount 条（保护 dislike/attitude 不被挤出淘汰）
+   */
+  public pruneUserProfileFacts(userId: string, maxCount = 3): void {
+    const nonDislikeRows = this.db
+      .prepare('SELECT id FROM user_profiles WHERE user_id = ? AND category != ? ORDER BY weight DESC, updated_at DESC')
+      .all(userId, 'dislike') as { id: number }[]
+
+    // 允许保留的普通事实配额为 maxCount - 1（给态度预留1条位）
+    const allowed = Math.max(1, maxCount - 1)
+    if (nonDislikeRows.length > allowed) {
+      const idsToDelete = nonDislikeRows.slice(allowed).map((r) => r.id)
+      for (const id of idsToDelete) {
+        this.db.prepare('DELETE FROM user_profiles WHERE id = ?').run(id)
+      }
     }
   }
 

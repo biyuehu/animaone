@@ -101,8 +101,8 @@ flowchart TD
 | `apiKey` | `string` | **必填** | Google Gemini API Key |
 | `modelName` | `string` | `'gemini-3.5-flash-lite'` | 调用的模型名称（建议 Flash 系列保证响应速度） |
 | `proxy` | `string` | `undefined` | HTTP/SOCKS 代理地址（如 `http://127.0.0.1:7890`） |
-| `whitelistedGroups` | `string[]` | `[]` | 允许对话或旁观插嘴的群号白名单 |
-| `allowedPlatforms` | `string[]` | `['cmd', 'onebot']` | 允许接入响应的适配器平台列表 |
+| `whitelistedGroups` | `string[]` | `[]` | 允许对话或旁观插嘴的群号白名单（支持纯群号、platform:群号、identity:群号） |
+| `allowedInstances` | `string[]` | `[]` | 允许接入响应的适配器实例 identity 列表（留空则不限制全部放行） |
 | `groupActiveRate` | `number` | `0.05` | 群聊未被叫到时的随机搭话概率（0.0 ~ 1.0） |
 | `botNames` | `string[]` | `['λ']` | 机器人名称列表，第一个为默认名，数组所有名字均可唤醒 |
 | `masterNick` | `string` | `'大哥哥'` | 对主人的默认基础称呼（优先遵从画像记忆约定） |
@@ -110,7 +110,9 @@ flowchart TD
 | `masterPrivate` | `string` | *(见常量)* | 主人私聊环境下的专属人设提示词 |
 | `masterGroup` | `string` | *(见常量)* | 主人在群聊环境下的交互人设提示词 |
 | `memberGroup` | `string` | *(见常量)* | 普通群成员在群聊环境下的交互人设提示词（防认错人） |
-| `platformAspects` | `Record<string, string>` | *(见常量)* | 各平台专属风格特质映射 |
+| `friendPrivate` | `string` | *(见常量)* | 好友在私聊环境下的交互人设提示词 |
+| `allowFriendPrivate` | `boolean` | `true` | 是否允许普通好友私聊交互 |
+| `identityAspects` | `Record<string, string>` | *(见常量)* | 各实例专属风格特质切面映射 |
 | `enableHumanDelay` | `boolean` | `true` | 是否启用自然呼吸感的轻量分句与打字发送延迟 |
 | `splitThreshold` | `number` | `120` | 长回复整体发送不拆条的字符长度阈值 |
 | `trailingBracketRate` | `number` | `0.08` | 短句末尾随机添加拟人半括号变体的概率 |

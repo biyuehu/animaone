@@ -74,7 +74,7 @@ export class AbilityManager {
       return {
         success: false,
         error: 'PERMISSION_DENIED',
-        message: `操作失败：当前对话者无权调用此工具。此工具仅限主人可用。`
+        message: `操作失败：当前对话者无权调用此工具。`
       }
     }
 

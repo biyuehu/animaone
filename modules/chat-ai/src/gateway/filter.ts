@@ -19,7 +19,7 @@ export function sanitizeCqCodes(message: string): string {
 export type GatewayDecision =
   | {
       readonly allow: true
-      readonly reason: 'master_direct' | 'group_direct' | 'group_casual' | 'group_followup'
+      readonly reason: 'master_direct' | 'friend_direct' | 'group_direct' | 'group_casual' | 'group_followup'
       readonly cleanedMessage: string
       readonly needTargetUser?: boolean
       readonly replyId?: string
@@ -30,7 +30,7 @@ export type GatewayDecision =
     }
 
 export const allowedDecision = (
-  reason: 'master_direct' | 'group_direct' | 'group_casual' | 'group_followup',
+  reason: 'master_direct' | 'friend_direct' | 'group_direct' | 'group_casual' | 'group_followup',
   cleanedMessage: string,
   needTargetUser?: boolean,
   replyId?: string
@@ -50,9 +50,10 @@ export const rejectedDecision = (reason: 'platform_rejected' | 'rejected'): Gate
 export interface GatewayConfig {
   readonly whitelistedGroups: string[]
   readonly groupActiveRate: number
-  readonly allowedPlatforms: string[]
+  readonly allowedInstances: string[]
   readonly followupWindow: number
   readonly burstThreshold: number
+  readonly allowFriendPrivate: boolean
 }
 
 export class MessageGateway {
@@ -70,21 +71,26 @@ export class MessageGateway {
     groupId: string | undefined,
     rawMessage: string,
     platform: string,
+    identity: string,
     masterId: string,
     botSelfId: string,
     botNames: string[]
   ): GatewayDecision {
-    if (this.config.allowedPlatforms.length > 0 && (!platform || !this.config.allowedPlatforms.includes(platform)))
+    if (this.config.allowedInstances.length > 0 && (!identity || !this.config.allowedInstances.includes(identity)))
       return rejectedDecision('platform_rejected')
 
-    if (!groupId)
-      return masterId && String(userId) === String(masterId)
-        ? allowedDecision('master_direct', sanitizeCqCodes(rawMessage))
+    if (!groupId) {
+      if (masterId && String(userId) === String(masterId))
+        return allowedDecision('master_direct', sanitizeCqCodes(rawMessage))
+      return this.config.allowFriendPrivate
+        ? allowedDecision('friend_direct', sanitizeCqCodes(rawMessage))
         : rejectedDecision('rejected')
+    }
 
     if (
       !this.config.whitelistedGroups.includes(groupId) &&
-      !this.config.whitelistedGroups.includes(`${platform}:${groupId}`)
+      !this.config.whitelistedGroups.includes(`${platform}:${groupId}`) &&
+      !this.config.whitelistedGroups.includes(`${identity}:${groupId}`)
     )
       return rejectedDecision('rejected')
 
