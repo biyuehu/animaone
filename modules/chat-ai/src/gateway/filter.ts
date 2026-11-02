@@ -60,11 +60,52 @@ export interface GatewayConfig {
 export class MessageGateway {
   private readonly lastCasualSpeechTime: Map<string, number> = new Map()
   private readonly recentMsgTimestamps: Map<string, number[]> = new Map()
+  private readonly calmUntil: Map<string, number> = new Map()
+  private readonly shutUntil: Map<string, number> = new Map()
 
   constructor(private readonly config: GatewayConfig) {}
 
   public recordCasualSpeech(groupId: string): void {
+    if (this.isCalmed(groupId)) return
     this.lastCasualSpeechTime.set(groupId, Date.now())
+  }
+
+  public calm(scope: string, durationSec?: number): number {
+    const duration = (durationSec && durationSec > 0 ? durationSec : this.config.followupWindow) * 1000
+    this.lastCasualSpeechTime.delete(scope)
+    this.calmUntil.set(scope, Date.now() + duration)
+    return Math.round(duration / 1000)
+  }
+
+  public isCalmed(scope: string): boolean {
+    const until = this.calmUntil.get(scope)
+    if (!until) return false
+    if (Date.now() >= until) {
+      this.calmUntil.delete(scope)
+      return false
+    }
+    return true
+  }
+
+  public shut(scope: string, durationSec = 600): number {
+    if (durationSec <= 0) {
+      this.shutUntil.delete(scope)
+      return 0
+    }
+    const duration = durationSec * 1000
+    this.lastCasualSpeechTime.delete(scope)
+    this.shutUntil.set(scope, Date.now() + duration)
+    return durationSec
+  }
+
+  public isShut(scope: string): boolean {
+    const until = this.shutUntil.get(scope)
+    if (!until) return false
+    if (Date.now() >= until) {
+      this.shutUntil.delete(scope)
+      return false
+    }
+    return true
   }
 
   public evaluate(
@@ -79,6 +120,11 @@ export class MessageGateway {
   ): GatewayDecision {
     if (this.config.allowedInstances.length > 0 && (!identity || !this.config.allowedInstances.includes(identity)))
       return rejectedDecision('platform_rejected')
+
+    const currentScope = groupId ? `${identity}:${groupId}` : `${identity}:${userId}`
+    if (this.isShut(currentScope) || (groupId && this.isShut(groupId))) {
+      return rejectedDecision('rejected')
+    }
 
     if (!groupId) {
       const replyId = rawMessage.match(/\[CQ:reply,id=(-?\d+)\]/i)?.[1]
@@ -123,11 +169,14 @@ export class MessageGateway {
       )
     }
 
-    const lastTime = this.lastCasualSpeechTime.get(groupId)
-    if (lastTime && now - lastTime < this.config.followupWindow * 1000 && rawMessage.trim().length >= 2)
+    const scopeKey = `${identity}:${groupId}`
+    const isCalm = this.isCalmed(scopeKey) || this.isCalmed(groupId)
+
+    const lastTime = this.lastCasualSpeechTime.get(groupId) ?? this.lastCasualSpeechTime.get(scopeKey)
+    if (!isCalm && lastTime && now - lastTime < this.config.followupWindow * 1000 && rawMessage.trim().length >= 2)
       return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
 
-    return rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
+    return !isCalm && rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
       ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
       : rejectedDecision('rejected')
   }

@@ -247,6 +247,21 @@ export class HierarchicalMemoryService {
   }
 
   /**
+   * 管理员直接设定用户的坏感度态度等级（0 为赦免恢复正常）
+   */
+  public setUserAttitude(userId: string, level: number, reason?: string): { newLevel: number; statusText: string } {
+    return this.db.setUserAttitude(userId, level, reason)
+  }
+
+  /**
+   * 清空特定会话 scope 的短期上下文记忆（内存滑窗与数据库最近消息）
+   */
+  public clearShortTerm(scopeKey: string): void {
+    this.slidingWindow.clear(scopeKey)
+    this.db.clearRecentMessages(scopeKey)
+  }
+
+  /**
    * 熔断自愈：从短期滑窗和持久化最近消息表中剔除最近一条可疑的用户入站消息，解除 PROHIBITED_CONTENT 死锁
    */
   public purgeSuspiciousUserMessage(scopeKey: string): void {

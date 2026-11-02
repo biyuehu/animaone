@@ -331,6 +331,42 @@ export class MemoryDatabase {
   }
 
   /**
+   * 管理员直接设定用户的态度等级（0: 正常/赦免，1: 略微反感，2: 比较反感，3: 十分反感，4: 彻底无视）
+   */
+  public setUserAttitude(
+    userId: string,
+    level: number,
+    reason = '管理员调整'
+  ): { newLevel: number; statusText: UserDislikeLevelText } {
+    const clampedLevel = Math.max(0, Math.min(4, Math.floor(level)))
+    const statusText = USER_DISLIKE_LEVELS[clampedLevel] ?? USER_DISLIKE_LEVELS[0]
+
+    if (clampedLevel === 0) {
+      this.db.prepare('DELETE FROM user_profiles WHERE user_id = ? AND category = ?').run(userId, 'dislike')
+      return { newLevel: 0, statusText }
+    }
+
+    const factText = `【${statusText}】${reason}`
+    const exists = this.db
+      .prepare('SELECT id FROM user_profiles WHERE user_id = ? AND category = ?')
+      .get(userId, 'dislike') as { id: number } | undefined
+
+    if (exists) {
+      this.db
+        .prepare('UPDATE user_profiles SET weight = ?, fact = ?, updated_at = ? WHERE id = ?')
+        .run(clampedLevel, factText, Date.now(), exists.id)
+    } else {
+      this.db
+        .prepare(
+          'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(userId, factText, 'dislike', 'private', 'attitude', clampedLevel, Date.now())
+    }
+
+    return { newLevel: clampedLevel, statusText }
+  }
+
+  /**
    * 修剪普通用户的陈旧事实，保留最多 maxCount 条（保护 dislike/attitude 不被挤出淘汰）
    */
   public pruneUserProfileFacts(userId: string, maxCount = 3): void {
@@ -527,6 +563,13 @@ export class MemoryDatabase {
       return true
     }
     return false
+  }
+
+  /**
+   * 清空特定会话 scope 下的全部近期消息（用于管理员 /flush 清理上下文）
+   */
+  public clearRecentMessages(scopeKey: string): void {
+    this.db.prepare('DELETE FROM recent_messages WHERE scope_key = ?').run(scopeKey)
   }
 
   /**
