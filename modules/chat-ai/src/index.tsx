@@ -28,6 +28,7 @@ import {
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
 import { applyTrailingBracket, calculateTypingDelay, splitSentences, stripLeadingTimestamps } from './core/split'
+import { parseVoiceSegments, stripVoiceTags, TTSService, toVoicePayload } from './core/tts'
 import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
@@ -72,7 +73,12 @@ export const config = Tsu.Object({
   activeMemoryCapacity: Tsu.Number().default(15).describe('组装上下文时最多召回的用户画像事实条数'),
   enableDreamReflection: Tsu.Boolean().default(true).describe('是否开启凌晨闲暇做梦灵感推演'),
   dreamCooldown: Tsu.Number().default(900).describe('主动调用做梦工具的冷却时间（秒，默认15分钟）'),
-  maxToolLoops: Tsu.Number().default(10).describe('单轮对话大模型工具调用最大循环次数')
+  maxToolLoops: Tsu.Number().default(10).describe('单轮对话大模型工具调用最大循环次数'),
+  ttsCommand: Tsu.String()
+    .optional()
+    .describe('外部 TTS 脚本可执行命令（如 python path/to/tts.py），留空则关闭语音合成'),
+  ttsCooldown: Tsu.Number().default(45).describe('群聊中发送语音条的冷却秒数'),
+  ttsMaxChars: Tsu.Number().default(60).describe('允许转为语音条的单句最大字符数阈值')
 })
 
 export type Config = Tsu.infer<typeof config>
@@ -118,6 +124,17 @@ export function main(ctx: Context, cfg: Config) {
     cfg.enableDreamReflection,
     ctx.logger
   )
+
+  const tts = new TTSService(
+    {
+      command: cfg.ttsCommand,
+      cooldownSec: cfg.ttsCooldown,
+      maxChars: cfg.ttsMaxChars,
+      cacheDir: path.join(ctx.baseDir.data, 'cache', 'voices')
+    },
+    ctx.logger
+  )
+
   const abilityManager = new AbilityManager(ctx.logger)
   abilityManager.register(systemStatusAbility)
   abilityManager.register(createRememberAbility(memory))
@@ -350,6 +367,24 @@ export function main(ctx: Context, cfg: Config) {
       return '梦境推演未产生新的灵感（记忆节点不足或推演无产出）。'
     })
 
+  ctx
+    .command('tts <text:string> [lang:string] - 强制测试调用外部 TTS 脚本并发送语音')
+    .access(UserAccess.ADMIN)
+    .action(async (data, session) => {
+      const adapter = session.api.adapter
+      const text = data.args[0]?.trim()
+      const lang = data.args[1]?.trim() || 'auto'
+      if (!text) return '请输入需要转为语音的文本内容。'
+      if (!tts.isEnabled()) return '当前插件未配置 ttsCommand，语音功能未启用。'
+
+      session.quick('正在调用外部 TTS 脚本合成中，请稍候...')
+      const wavPath = await tts.synthesize(text, adapter.identity, lang)
+      if (wavPath) {
+        return Messages.voice(toVoicePayload(wavPath))
+      }
+      return 'TTS 合成失败，请检查外部脚本路径或查看后台日志报错。'
+    })
+
   ctx.midware(async (next, session) => {
     if (session.channelId || session.guildId) return next()
 
@@ -449,6 +484,12 @@ export function main(ctx: Context, cfg: Config) {
           '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默。'
         )
 
+      if (tts.isEnabled() && /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)) {
+        extraContexts.push(
+          '【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音。'
+        )
+      }
+
       const systemPrompt = buildSystemPrompt(
         cfg,
         {
@@ -478,28 +519,77 @@ export function main(ctx: Context, cfg: Config) {
       const sendBotSpeech = async (rawText: string, isFirstOutput: boolean) => {
         const text = stripLeadingTimestamps(rawText)
         if (!text) return
-        const segments = cfg.enableHumanDelay ? splitSentences(text, cfg.splitThreshold) : [text]
-        if (segments.length > 0)
-          segments[segments.length - 1] = applyTrailingBracket(
-            segments[segments.length - 1],
-            cfg.trailingBracketRate,
-            cfg.trailingBracketVariants
-          )
 
-        for (let i = 0; i < segments.length; i++) {
-          const delayTime = cfg.enableHumanDelay
-            ? Math.max(0, calculateTypingDelay(segments[i], isFirstOutput && i === 0))
-            : 0
+        // 1. 先从全文中提取完整的语音段与普通文字段，避免内部句号或换行被 splitSentences 提前切断
+        const voiceParts = parseVoiceSegments(text)
+
+        interface OutputItem {
+          isVoice: boolean
+          content: string
+          lang?: string
+        }
+        const items: OutputItem[] = []
+
+        for (const part of voiceParts) {
+          if (part.isVoice) {
+            const cleanVoiceText = part.content.replace(/\r?\n+/g, '，').trim()
+            if (cleanVoiceText) {
+              items.push({
+                isVoice: true,
+                content: cleanVoiceText,
+                lang: part.lang
+              })
+            }
+          } else {
+            const cleanText = part.content.trim()
+            if (!cleanText) continue
+            const subSentences = cfg.enableHumanDelay ? splitSentences(cleanText, cfg.splitThreshold) : [cleanText]
+            for (const s of subSentences) {
+              if (s.trim()) items.push({ isVoice: false, content: s.trim() })
+            }
+          }
+        }
+
+        if (items.length === 0) return
+
+        // 仅在最后一项为纯文字时附带半括号拟人尾缀
+        const lastIdx = items.length - 1
+        if (!items[lastIdx].isVoice) {
+          items[lastIdx] = {
+            isVoice: false,
+            content: applyTrailingBracket(items[lastIdx].content, cfg.trailingBracketRate, cfg.trailingBracketVariants)
+          }
+        }
+
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i]
+          const isFirst = isFirstOutput && i === 0
+
+          if (item.isVoice && tts.canSynthesize(scopeKey, item.content, isMaster)) {
+            const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
+            if (wavPath) {
+              tts.recordSent(scopeKey)
+              const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
+              if (voiceDelay > 0) await sleep(voiceDelay)
+              await session.quick(Messages.voice(toVoicePayload(wavPath)))
+              continue
+            }
+          }
+
+          const cleanText = item.content.trim()
+          if (!cleanText) continue
+
+          const delayTime = cfg.enableHumanDelay ? Math.max(0, calculateTypingDelay(cleanText, isFirst)) : 0
           if (delayTime > 0) {
-            ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${segments.length}`)
+            ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${items.length}`)
             await sleep(delayTime)
           }
           await session.quick(
-            isFirstOutput && i === 0 && groupId && decision.needTargetUser
+            isFirst && groupId && decision.needTargetUser
               ? Math.random() > 0.5
-                ? Messages(Messages.mention(session.userId), ' ', segments[i])
-                : Messages(Messages.reply(session.messageId), segments[i])
-              : segments[i]
+                ? Messages(Messages.mention(session.userId), ' ', cleanText)
+                : Messages(Messages.reply(session.messageId), cleanText)
+              : cleanText
           )
         }
       }
@@ -562,7 +652,7 @@ export function main(ctx: Context, cfg: Config) {
         await sendBotSpeech(reply, !hasSentImmediate)
       }
 
-      const fullCombinedReply = allEmittedTexts.join('\n').trim()
+      const fullCombinedReply = stripVoiceTags(allEmittedTexts.join('\n')).trim()
       if (!fullCombinedReply) return
 
       if (groupId && (decision.reason === 'group_casual' || decision.reason === 'group_followup'))
