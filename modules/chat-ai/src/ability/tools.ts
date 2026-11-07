@@ -253,7 +253,7 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
           }
         }
       },
-      execute: async (args: { query?: string; targetPlatform?: string; limit?: number }) => {
+      execute: async (args: { query?: string; targetPlatform?: string; limit?: number }, ctx?: AbilityContext) => {
         const limit = args.limit ?? 6
         const db = memory.getDatabase()
         const queryText = (args.query ?? '').trim()
@@ -267,7 +267,10 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
               const scope = parseScopeKey(c.scope)
               const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
               const platformTag = scope.platform.toUpperCase()
-              const isMaster = c.userId === '__master__' || c.role === 'model'
+              const isMaster =
+                c.userId === '__master__' ||
+                (ctx?.isMaster && c.userId === ctx.userId) ||
+                (scope.type === 'private' && c.role === 'user')
               const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
               const masterTag = c.role !== 'model' && isMaster ? '[MASTER]' : ''
               const line = `[${platformTag}][${chatType}]${senderTag}${masterTag} ${c.content}`
@@ -308,13 +311,21 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
             visibility: p.visibility,
             lastUpdated: new Date(p.updatedAt).toLocaleDateString('zh-CN')
           })),
-          dialogueHistory: matchedDialogues.map((d) => ({
-            scope: d.scope,
-            sender: `${d.senderName || '用户'}(${d.userId})`,
-            role: d.role,
-            content: d.content,
-            time: d.time
-          })),
+          dialogueHistory: matchedDialogues.map((d) => {
+            const scope = parseScopeKey(d.scope)
+            const isMaster =
+              d.userId === '__master__' ||
+              (ctx?.isMaster && d.userId === ctx.userId) ||
+              (scope.type === 'private' && d.role === 'user')
+            const masterTag = d.role !== 'model' && isMaster ? '[MASTER]' : ''
+            return {
+              scope: d.scope,
+              sender: `${d.senderName || '用户'}(${d.userId})${masterTag}`,
+              role: d.role,
+              content: d.content,
+              time: d.time
+            }
+          }),
           eventSummaries: eventNodes.map((n) => ({
             level: n.level,
             summary: n.summary,
