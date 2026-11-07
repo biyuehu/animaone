@@ -166,7 +166,14 @@ export class HierarchicalMemoryService {
 
     for (const [scopeKey, chatList] of this.activeChatBuffer.entries()) {
       if (chatList.length === 0) continue
-      if (parseScopeKey(scopeKey).type === 'private' && !scopeKey.includes(':private:master')) continue
+      const scope = parseScopeKey(scopeKey)
+
+      // 普通好友私聊不建立长期事件归档，直接释放内存缓冲区
+      if (scope.type === 'private' && (!masterId || scope.userId !== String(masterId))) {
+        this.activeChatBuffer.delete(scopeKey)
+        this.uncommittedChatCount.delete(scopeKey)
+        continue
+      }
 
       if (now - (chatList[chatList.length - 1]?.timestamp ?? 0) >= this.idleCompactTimeout * 1000) {
         this.uncommittedChatCount.set(scopeKey, 0)
@@ -194,7 +201,7 @@ export class HierarchicalMemoryService {
 
     const hour = new Date(now).getHours()
     if (this.enableDreamReflection && hour >= 2 && hour < 5 && Math.random() < 0.3)
-      await this.triggerDream(masterId || '__master__').catch((err) => {
+      await this.triggerDream('__master__').catch((err) => {
         this.logger?.error(`Failed to trigger dream reflection: ${err instanceof Error ? err.message : String(err)}`)
       })
   }
