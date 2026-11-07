@@ -121,12 +121,11 @@ export class TTSService {
     const cleanText = text.trim()
     if (!cleanText) return false
 
-    // 主人享有特权：私聊和群聊中均无视冷却，单句上限放宽
-    if (isMaster) {
-      return cleanText.length <= this.maxChars * 2
-    }
-
+    // 字符上限严格统一限制（包括主人在内，单句过长的 TTS 失去听觉交互意义）
     if (cleanText.length > this.maxChars) return false
+
+    // 主人享有特权：私聊和群聊中均无视发言冷却
+    if (isMaster) return true
 
     const lastTime = this.lastVoiceTimes.get(scopeKey)
     if (lastTime && Date.now() - lastTime < this.cooldownSec * 1000) {

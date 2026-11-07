@@ -78,7 +78,12 @@ export const config = Tsu.Object({
     .optional()
     .describe('外部 TTS 脚本可执行命令（如 python path/to/tts.py），留空则关闭语音合成'),
   ttsCooldown: Tsu.Number().default(45).describe('群聊中发送语音条的冷却秒数'),
-  ttsMaxChars: Tsu.Number().default(60).describe('允许转为语音条的单句最大字符数阈值')
+  ttsMaxChars: Tsu.Number().default(60).describe('允许转为语音条的单句最大字符数阈值'),
+  ttsSequential: Tsu.Boolean()
+    .default(false)
+    .describe(
+      '是否要求 TTS 语音与文字内容连续按序等待发送。默认 false（两者独立并行，文字仅等待正常打字机模拟时长即可发出，无需等待语音合成）'
+    )
 })
 
 export type Config = Tsu.infer<typeof config>
@@ -486,7 +491,7 @@ export function main(ctx: Context, cfg: Config) {
 
       if (tts.isEnabled() && /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)) {
         extraContexts.push(
-          '【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音。'
+          `【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音（请严格遵守单句 ${cfg.ttsMaxChars} 字以内的限制，简短精炼）。`
         )
       }
 
@@ -533,11 +538,21 @@ export function main(ctx: Context, cfg: Config) {
           if (part.isVoice) {
             const cleanVoiceText = part.content.replace(/\r?\n+/g, '，').trim()
             if (cleanVoiceText) {
-              items.push({
-                isVoice: true,
-                content: cleanVoiceText,
-                lang: part.lang
-              })
+              if (tts.canSynthesize(scopeKey, cleanVoiceText, isMaster)) {
+                items.push({
+                  isVoice: true,
+                  content: cleanVoiceText,
+                  lang: part.lang
+                })
+              } else {
+                // 无法合成语音（超长、未开启或冷却中），安全降级为普通文字段
+                const subSentences = cfg.enableHumanDelay
+                  ? splitSentences(cleanVoiceText, cfg.splitThreshold)
+                  : [cleanVoiceText]
+                for (const s of subSentences) {
+                  if (s.trim()) items.push({ isVoice: false, content: s.trim() })
+                }
+              }
             }
           } else {
             const cleanText = part.content.trim()
@@ -553,24 +568,46 @@ export function main(ctx: Context, cfg: Config) {
 
         // 仅在最后一项为纯文字时附带半括号拟人尾缀
         const lastIdx = items.length - 1
-        if (!items[lastIdx].isVoice) {
+        if (lastIdx >= 0 && !items[lastIdx].isVoice) {
           items[lastIdx] = {
             isVoice: false,
             content: applyTrailingBracket(items[lastIdx].content, cfg.trailingBracketRate, cfg.trailingBracketVariants)
           }
         }
 
+        let firstTextSent = false
+
         for (let i = 0; i < items.length; i++) {
           const item = items[i]
-          const isFirst = isFirstOutput && i === 0
 
-          if (item.isVoice && tts.canSynthesize(scopeKey, item.content, isMaster)) {
-            const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
-            if (wavPath) {
-              tts.recordSent(scopeKey)
-              const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
-              if (voiceDelay > 0) await sleep(voiceDelay)
-              await session.quick(Messages.voice(toVoicePayload(wavPath)))
+          if (item.isVoice) {
+            if (cfg.ttsSequential) {
+              // 连续阻塞模式：等待 TTS 脚本生成完毕后发送语音条，随后再继续后续文字
+              const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
+              if (wavPath) {
+                tts.recordSent(scopeKey)
+                const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
+                if (voiceDelay > 0) await sleep(voiceDelay)
+                await session.quick(Messages.voice(toVoicePayload(wavPath)))
+                continue
+              }
+            } else {
+              // 独立非阻塞模式（默认）：语音后台异步合成并发送，不阻塞文字消息的打字机流
+              void (async () => {
+                try {
+                  const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
+                  if (wavPath) {
+                    tts.recordSent(scopeKey)
+                    const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
+                    if (voiceDelay > 0) await sleep(voiceDelay)
+                    await session.quick(Messages.voice(toVoicePayload(wavPath)))
+                  } else {
+                    await session.quick(item.content.trim())
+                  }
+                } catch (err) {
+                  ctx.logger.error(`Async voice synthesis failed: ${err instanceof Error ? err.message : String(err)}`)
+                }
+              })()
               continue
             }
           }
@@ -578,13 +615,16 @@ export function main(ctx: Context, cfg: Config) {
           const cleanText = item.content.trim()
           if (!cleanText) continue
 
-          const delayTime = cfg.enableHumanDelay ? Math.max(0, calculateTypingDelay(cleanText, isFirst)) : 0
+          const isFirstText = isFirstOutput && !firstTextSent
+          firstTextSent = true
+
+          const delayTime = cfg.enableHumanDelay ? Math.max(0, calculateTypingDelay(cleanText, isFirstText)) : 0
           if (delayTime > 0) {
             ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${items.length}`)
             await sleep(delayTime)
           }
           await session.quick(
-            isFirst && groupId && decision.needTargetUser
+            isFirstText && groupId && decision.needTargetUser
               ? Math.random() > 0.5
                 ? Messages(Messages.mention(session.userId), ' ', cleanText)
                 : Messages(Messages.reply(session.messageId), cleanText)
