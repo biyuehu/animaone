@@ -520,7 +520,6 @@ export function main(ctx: Context, cfg: Config) {
         const text = stripLeadingTimestamps(rawText)
         if (!text) return
 
-        // 1. 先从全文中提取完整的语音段与普通文字段，避免内部句号或换行被 splitSentences 提前切断
         const voiceParts = parseVoiceSegments(text)
 
         interface OutputItem {

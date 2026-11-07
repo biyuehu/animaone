@@ -255,10 +255,27 @@ export class MemoryDatabase {
     return combined
   }
 
-  public getRandomNodesForReflection(limit: number): MemoryNode[] {
+  public getRandomNodesForReflection(limit: number, masterId?: string): MemoryNode[] {
+    if (masterId && masterId !== '__master__') {
+      const specificMasterNodes = this.db
+        .prepare(
+          `SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt 
+           FROM memory_nodes 
+           WHERE scope_key LIKE '%:private:' || ? 
+           ORDER BY RANDOM() LIMIT ?`
+        )
+        .all(masterId, limit) as unknown as MemoryNode[]
+
+      if (specificMasterNodes.length >= limit) return specificMasterNodes
+    }
+
+    // 默认或后备：仅从主人私聊节点中抽样，严格过滤掉所有群聊（group）节点，杜绝群友对话污染主人做梦
     return this.db
       .prepare(
-        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ORDER BY RANDOM() LIMIT ?'
+        `SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt 
+         FROM memory_nodes 
+         WHERE scope_key LIKE '%:private:%' AND scope_key NOT LIKE '%:group:%'
+         ORDER BY RANDOM() LIMIT ?`
       )
       .all(limit) as unknown as MemoryNode[]
   }

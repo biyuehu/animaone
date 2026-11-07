@@ -82,7 +82,7 @@ ${dialogues.map((d) => `${d.role}: ${d.content}`).join('\n')}`
   }
 
   public async dreamReflection(masterId = '__master__'): Promise<DreamReflectionResult | null> {
-    const nodes = this.db.getRandomNodesForReflection(2)
+    const nodes = this.db.getRandomNodesForReflection(2, masterId)
     if (nodes.length < 2) return null
 
     const submergedFacts = this.db.getSubmergedProfileFacts(masterId, 15, 3)
