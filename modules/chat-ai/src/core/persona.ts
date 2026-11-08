@@ -11,6 +11,7 @@ export interface PersonaRuntimeContext {
   readonly isMaster: boolean
   readonly birthTime: number
   readonly isTtsCoolingDown?: boolean
+  readonly hasVoiceRequest?: boolean
 }
 
 export function buildSystemPrompt(
@@ -28,7 +29,8 @@ export function buildSystemPrompt(
       .replaceAll('{identity}', runtime.identity)
       .replaceAll('{platform}', runtime.platform)
 
-  const isTtsDisabled = !config.ttsCommand || (!runtime.isMaster && Boolean(runtime.isTtsCoolingDown))
+  const isTtsDisabled =
+    !config.ttsCommand || (!runtime.isMaster && (Boolean(runtime.isTtsCoolingDown) || !runtime.hasVoiceRequest))
 
   const ZONE = 'zh-CN'
   const now = new Date()
@@ -74,7 +76,7 @@ export function buildSystemPrompt(
           `【单句语音字符上限】当前系统设定的单句语音最大字符长度限制为：${config.ttsMaxChars ?? 60} 字（超长语音无实际听觉交互意义）。若单句超出此长度将被系统自动拦截并降级为纯文字发送！`,
           '【单轮至多一条语音】单次回复中严格最多只允许出现 1 个 voice 标签！严禁连续发送多条语音，严禁在一次回复中包裹多个 [voice: ...] 标签。',
           '【严禁纯语音，必须有普通文字陪伴】语音条仅作为情感点缀或开头轻语，绝对严禁整条回复全部都是 voice 标签而没有一句普通文字！你必须在 voice 标签之外附带正常的中文交流文字、回应内容或互动吐槽。此外语音仅适用于日常交流中。效率性的专业场合请三思。',
-          '【语种严格匹配，严禁中文套用 voice(ja)】[voice(ja): ...] 内部必须且只能是真正的日语（必须包含平假名/片假名）。绝对严禁将中文释义、翻译或中文句子塞进 [voice(ja): ...] 中！如果你发了日语语音条想附带中文翻译，翻译必须作为普通的纯文本写在标签外面，例如：\n[voice(ja): 大好きだよ！]\n诶嘿，最喜欢大哥哥了呀，理所当然的嘛',
+          '【语种严格匹配，严禁中文套用 voice(ja)】[voice(ja): ...] 内部必须且只能是真正的日语（必须包含平假名/片假名）。绝对严禁将中文释义、翻译或中文句子塞进 [voice(ja): ...] 中！如果你发了日语语音条想附带中文翻译，翻译必须作为普通的纯文本写在标签外面，例如：\n[voice(ja): 今日もいい天気ですね。]\n今天天气真不错呢',
           '【语音与文字内容分离原则】严禁在 [voice: ...] 内部塞入整段长篇大论、技术解析或长段说明！语音标签内仅允许放置简短口语问候、情绪短句、语气词或核心短语（建议控制在 20~40 字以内），详细展开内容必须写在标签外用文字发送。',
           '群聊中需极度克制，严禁频繁滥用语音。严肃讨论或长篇大论严禁包裹 voice。'
         ].join('\n')

@@ -417,13 +417,10 @@ export function main(ctx: Context, cfg: Config) {
           '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默。'
         )
 
+      const isVoiceRequested = /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)
       const isTtsCoolingDown = !isMaster && tts.isCoolingDown(scopeKey, isMaster)
 
-      if (
-        tts.isEnabled() &&
-        !isTtsCoolingDown &&
-        /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)
-      ) {
+      if (tts.isEnabled() && !isTtsCoolingDown && isVoiceRequested) {
         extraContexts.push(
           `【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音（请严格遵守单句 ${cfg.ttsMaxChars} 字以内的限制，简短精炼）。`
         )
@@ -440,7 +437,8 @@ export function main(ctx: Context, cfg: Config) {
           groupId,
           isMaster,
           birthTime: memory.getBirthTime(),
-          isTtsCoolingDown
+          isTtsCoolingDown,
+          hasVoiceRequest: isVoiceRequested
         },
         extraContexts
       )
