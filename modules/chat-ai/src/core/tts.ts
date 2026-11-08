@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Logger } from 'kotori-bot'
 
 export interface TTSConfig {
@@ -76,14 +77,19 @@ export function stripVoiceTags(text: string): string {
 }
 
 /**
- * 将本地生成的音频文件转换为兼容本地及远程 OneBot 实例的语音负载 (base64://)
+ * 将本地生成的音频文件转换为语音负载：
+ * - cmd 平台：保留标准 file:// URL 形式，防止终端被大量 Base64 刷屏；
+ * - 非 cmd 平台（如 OneBot 等跨网络实例）：读取文件转换为 base64:// 负载，确保远端实例顺利接收并播放。
  */
-export function toVoicePayload(wavPath: string): string {
+export function toVoicePayload(wavPath: string, platform?: string): string {
+  if (platform === 'cmd') {
+    return pathToFileURL(path.resolve(wavPath)).href
+  }
   try {
     const buffer = fs.readFileSync(wavPath)
     return `base64://${buffer.toString('base64')}`
   } catch {
-    return path.resolve(wavPath)
+    return pathToFileURL(path.resolve(wavPath)).href
   }
 }
 
@@ -128,6 +134,16 @@ export class TTSService {
 
   public isEnabled(): boolean {
     return Boolean(this.command && this.command.length > 0)
+  }
+
+  /**
+   * 检查指定会话当前是否处于语音冷却中（主人永远不处于冷却）
+   */
+  public isCoolingDown(scopeKey: string, isMaster = false): boolean {
+    if (!this.isEnabled()) return false
+    if (isMaster) return false
+    const lastTime = this.lastVoiceTimes.get(scopeKey)
+    return Boolean(lastTime && Date.now() - lastTime < this.cooldownSec * 1000)
   }
 
   /**
