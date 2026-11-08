@@ -27,7 +27,13 @@ import {
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
 import { buildSystemPrompt } from './core/persona'
-import { applyTrailingBracket, calculateTypingDelay, splitSentences, stripLeadingTimestamps } from './core/split'
+import {
+  applyTrailingBracket,
+  calculateTypingDelay,
+  cleanBotSpeech,
+  isMeaningfulSpeech,
+  splitSentences
+} from './core/split'
 import { parseVoiceSegments, stripVoiceTags, TTSService, toVoicePayload } from './core/tts'
 import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
@@ -307,7 +313,7 @@ export function main(ctx: Context, cfg: Config) {
       session.quick('正在调用外部 TTS 脚本合成中，请稍候...')
       const wavPath = await tts.synthesize(text, adapter.identity, lang)
       if (wavPath) {
-        return Messages.voice(toVoicePayload(wavPath))
+        return Messages.voice(toVoicePayload(wavPath, adapter.platform))
       }
       return 'TTS 合成失败，请检查外部脚本路径或查看后台日志报错。'
     })
@@ -411,7 +417,13 @@ export function main(ctx: Context, cfg: Config) {
           '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默。'
         )
 
-      if (tts.isEnabled() && /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)) {
+      const isTtsCoolingDown = !isMaster && tts.isCoolingDown(scopeKey, isMaster)
+
+      if (
+        tts.isEnabled() &&
+        !isTtsCoolingDown &&
+        /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)
+      ) {
         extraContexts.push(
           `【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音（请严格遵守单句 ${cfg.ttsMaxChars} 字以内的限制，简短精炼）。`
         )
@@ -427,7 +439,8 @@ export function main(ctx: Context, cfg: Config) {
           userId,
           groupId,
           isMaster,
-          birthTime: memory.getBirthTime()
+          birthTime: memory.getBirthTime(),
+          isTtsCoolingDown
         },
         extraContexts
       )
@@ -443,9 +456,9 @@ export function main(ctx: Context, cfg: Config) {
       const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
       const replyHint = quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
 
-      const sendBotSpeech = async (rawText: string, isFirstOutput: boolean) => {
-        const text = stripLeadingTimestamps(rawText)
-        if (!text) return
+      const sendBotSpeech = async (rawText: string, isFirstOutput: boolean): Promise<boolean> => {
+        const text = cleanBotSpeech(rawText)
+        if (!text || !isMeaningfulSpeech(text)) return false
 
         const voiceParts = parseVoiceSegments(text)
 
@@ -458,8 +471,8 @@ export function main(ctx: Context, cfg: Config) {
 
         for (const part of voiceParts) {
           if (part.isVoice) {
-            const cleanVoiceText = part.content.replace(/\r?\n+/g, '，').trim()
-            if (cleanVoiceText) {
+            const cleanVoiceText = cleanBotSpeech(part.content.replace(/\r?\n+/g, '，')).trim()
+            if (cleanVoiceText && isMeaningfulSpeech(cleanVoiceText)) {
               if (tts.canSynthesize(scopeKey, cleanVoiceText, isMaster)) {
                 items.push({
                   isVoice: true,
@@ -472,21 +485,41 @@ export function main(ctx: Context, cfg: Config) {
                   ? splitSentences(cleanVoiceText, cfg.splitThreshold)
                   : [cleanVoiceText]
                 for (const s of subSentences) {
-                  if (s.trim()) items.push({ isVoice: false, content: s.trim() })
+                  const cleanedSub = cleanBotSpeech(s).trim()
+                  if (cleanedSub && isMeaningfulSpeech(cleanedSub)) {
+                    items.push({ isVoice: false, content: cleanedSub })
+                  }
                 }
               }
             }
           } else {
-            const cleanText = part.content.trim()
-            if (!cleanText) continue
+            const cleanText = cleanBotSpeech(part.content).trim()
+            if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
             const subSentences = cfg.enableHumanDelay ? splitSentences(cleanText, cfg.splitThreshold) : [cleanText]
             for (const s of subSentences) {
-              if (s.trim()) items.push({ isVoice: false, content: s.trim() })
+              const cleanedSub = cleanBotSpeech(s).trim()
+              if (cleanedSub && isMeaningfulSpeech(cleanedSub)) {
+                items.push({ isVoice: false, content: cleanedSub })
+              }
             }
           }
         }
 
-        if (items.length === 0) return
+        if (items.length === 0) return false
+
+        // 针对待发送文本：若单段长度小于 50 且末尾为句号，自动去掉末尾句号
+        for (const item of items) {
+          if (!item.isVoice) {
+            let c = cleanBotSpeech(item.content).trim()
+            if (c.length < 50 && (c.endsWith('。') || (c.endsWith('.') && !c.endsWith('..')))) {
+              c = c
+                .replace(/[。]+$/, '')
+                .replace(/(?<!\.)\.$/, '')
+                .trimEnd()
+            }
+            item.content = c
+          }
+        }
 
         // 仅在最后一项为纯文字时附带半括号拟人尾缀
         const lastIdx = items.length - 1
@@ -498,6 +531,7 @@ export function main(ctx: Context, cfg: Config) {
         }
 
         let firstTextSent = false
+        let sentAny = false
 
         for (let i = 0; i < items.length; i++) {
           const item = items[i]
@@ -510,7 +544,8 @@ export function main(ctx: Context, cfg: Config) {
                 tts.recordSent(scopeKey)
                 const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
                 if (voiceDelay > 0) await sleep(voiceDelay)
-                await session.quick(Messages.voice(toVoicePayload(wavPath)))
+                await session.quick(Messages.voice(toVoicePayload(wavPath, adapter.platform)))
+                sentAny = true
                 continue
               }
             } else {
@@ -522,20 +557,44 @@ export function main(ctx: Context, cfg: Config) {
                     tts.recordSent(scopeKey)
                     const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
                     if (voiceDelay > 0) await sleep(voiceDelay)
-                    await session.quick(Messages.voice(toVoicePayload(wavPath)))
+                    await session.quick(Messages.voice(toVoicePayload(wavPath, adapter.platform)))
                   } else {
-                    await session.quick(item.content.trim())
+                    let fallbackText = cleanBotSpeech(item.content).trim()
+                    if (fallbackText && isMeaningfulSpeech(fallbackText)) {
+                      if (
+                        fallbackText.length < 50 &&
+                        (fallbackText.endsWith('。') || (fallbackText.endsWith('.') && !fallbackText.endsWith('..')))
+                      ) {
+                        fallbackText = fallbackText
+                          .replace(/[。]+$/, '')
+                          .replace(/(?<!\.)\.$/, '')
+                          .trimEnd()
+                      }
+                      await session.quick(fallbackText)
+                    }
                   }
                 } catch (err) {
                   ctx.logger.error(`Async voice synthesis failed: ${err instanceof Error ? err.message : String(err)}`)
                 }
               })()
+              sentAny = true
               continue
             }
           }
 
-          const cleanText = item.content.trim()
-          if (!cleanText) continue
+          let cleanText = cleanBotSpeech(item.content).trim()
+          if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
+
+          if (
+            cleanText.length < 50 &&
+            (cleanText.endsWith('。') || (cleanText.endsWith('.') && !cleanText.endsWith('..')))
+          ) {
+            cleanText = cleanText
+              .replace(/[。]+$/, '')
+              .replace(/(?<!\.)\.$/, '')
+              .trimEnd()
+          }
+          if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
 
           const isFirstText = isFirstOutput && !firstTextSent
           firstTextSent = true
@@ -552,7 +611,10 @@ export function main(ctx: Context, cfg: Config) {
                 : Messages(Messages.reply(session.messageId), cleanText)
               : cleanText
           )
+          sentAny = true
         }
+
+        return sentAny
       }
 
       let hasSentImmediate = false
@@ -570,9 +632,16 @@ export function main(ctx: Context, cfg: Config) {
           abilityCtx,
           cfg.maxToolLoops,
           async (earlyText) => {
-            hasSentImmediate = true
-            allEmittedTexts.push(earlyText)
-            await sendBotSpeech(earlyText, true)
+            const cleaned = cleanBotSpeech(earlyText)
+            if (!isMeaningfulSpeech(cleaned, true)) {
+              ctx.logger.debug(`Suppressed meaningless early text before tools: ${earlyText}`)
+              return
+            }
+            const sent = await sendBotSpeech(earlyText, true)
+            if (sent) {
+              hasSentImmediate = true
+              allEmittedTexts.push(earlyText)
+            }
           }
         )
       } catch (chatErr) {
@@ -594,9 +663,16 @@ export function main(ctx: Context, cfg: Config) {
             abilityCtx,
             1,
             async (earlyText) => {
-              hasSentImmediate = true
-              allEmittedTexts.push(earlyText)
-              await sendBotSpeech(earlyText, true)
+              const cleaned = cleanBotSpeech(earlyText)
+              if (!isMeaningfulSpeech(cleaned, true)) {
+                ctx.logger.debug(`Suppressed meaningless early text before tools: ${earlyText}`)
+                return
+              }
+              const sent = await sendBotSpeech(earlyText, true)
+              if (sent) {
+                hasSentImmediate = true
+                allEmittedTexts.push(earlyText)
+              }
             }
           )
         } else {
@@ -609,12 +685,15 @@ export function main(ctx: Context, cfg: Config) {
       )
 
       if (reply && reply !== '__NO_REPLY__') {
-        allEmittedTexts.push(reply)
-        await sendBotSpeech(reply, !hasSentImmediate)
+        const cleaned = cleanBotSpeech(reply)
+        if (isMeaningfulSpeech(cleaned)) {
+          allEmittedTexts.push(reply)
+          await sendBotSpeech(reply, !hasSentImmediate)
+        }
       }
 
-      const fullCombinedReply = stripVoiceTags(allEmittedTexts.join('\n')).trim()
-      if (!fullCombinedReply) return
+      const fullCombinedReply = cleanBotSpeech(stripVoiceTags(allEmittedTexts.join('\n'))).trim()
+      if (!fullCombinedReply || !isMeaningfulSpeech(fullCombinedReply)) return
 
       if (groupId && (decision.reason === 'group_casual' || decision.reason === 'group_followup'))
         gateway.recordCasualSpeech(groupId)

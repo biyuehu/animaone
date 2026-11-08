@@ -1,5 +1,6 @@
 import type { Logger } from 'kotori-bot'
 import type { GeminiClient } from '../core/gemini'
+import { cleanBotSpeech } from '../core/split'
 import { formatAndTruncateMemory } from './context'
 import { parseScopeKey } from './scope'
 import { SlidingWindowMemory } from './sliding-window'
@@ -252,7 +253,7 @@ export class HierarchicalMemoryService {
 
     return this.slidingWindow.getContext(scopeKey).map((m) => {
       const timeTag = `[${formatTime(m.timestamp)}]`
-      if (m.role === 'model') return { role: 'model', content: `${timeTag} ${m.content}` }
+      if (m.role === 'model') return { role: 'model', content: cleanBotSpeech(m.content) }
       const userPrefix =
         isGroup && m.userId
           ? `${masterId && String(m.userId) === String(masterId) ? `[MASTER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[MEMBER: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
