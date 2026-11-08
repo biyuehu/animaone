@@ -57,77 +57,138 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
 export function createWebSearchOrFetchAbility(proxy?: string): Ability {
   return {
     name: 'web_search_or_fetch',
-    description: '抓取指定 URL 网页的正文文本，或者通过 DuckDuckGo 搜索即时网络信息与摘要',
+    description:
+      '全网实时信息搜索与网页正文抓取工具。' +
+      '1. 搜索模式（传入 query）：在互联网上检索信息，返回包含真实网页 url、title 标题和 snippet 摘要的结构化结果列表。' +
+      '2. 深度阅读/正文抓取模式（传入 url）：访问具体网页并抓取其一手正文。当需要详细考察、阅读项目 README、文档或报道时，必须接着传入目标 url 抓取正文，严禁仅凭零碎搜索摘要凭空臆断。',
     toolDefinition: {
       masterOnly: false,
       parameters: {
         type: 'OBJECT',
         properties: {
-          url: { type: 'STRING', description: '需要直接抓取提取正文的完整网址（如 https://...）' },
-          query: { type: 'STRING', description: '需要搜索的关键词短语（如果不指定 url 时使用）' }
+          url: {
+            type: 'STRING',
+            description:
+              '需要抓取提取正文的完整网址（如 https://...）。若已知目标网址或需要深入阅读搜索结果中的某一项，传入此参数'
+          },
+          query: {
+            type: 'STRING',
+            description: '需要搜索的关键词短语（如果不指定 url 时使用）'
+          }
         }
       },
       execute: async (args: { url?: string; query?: string }) => {
         const agent = proxy ? new ProxyAgent(proxy.startsWith('http') ? proxy : `http://${proxy}`) : undefined
 
-        if (args.url)
+        // 1. 如果指定了 url，直接抓取网页并提取核心正文
+        if (args.url) {
           try {
             const resp = await undiciFetch(args.url, {
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+              },
               dispatcher: agent,
-              signal: AbortSignal.timeout(8000)
+              signal: AbortSignal.timeout(10000)
             })
             const html = await resp.text()
-            const cleanText = html
+
+            // 优先尝试提取 Markdown / 文章主体区域，提升正文信噪比
+            let bodyContent = html
+            const articleMatch =
+              html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i) ?? html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)
+            if (articleMatch) {
+              bodyContent = articleMatch[1]
+            }
+
+            const cleanText = bodyContent
               .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
               .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
               .replace(/<[^>]+>/g, ' ')
               .replace(/\s+/g, ' ')
               .trim()
-              .slice(0, 2000)
+              .slice(0, 4500)
 
-            return { url: args.url, title: resp.statusText, content: cleanText || '未提取到正文内容' }
+            return {
+              url: args.url,
+              status: resp.status,
+              content: cleanText || '未提取到正文内容'
+            }
           } catch (e) {
             return { error: `网页抓取失败: ${e instanceof Error ? e.message : String(e)}` }
           }
+        }
 
-        // 2. 如果指定了 query，使用 DuckDuckGo Lite 进行即时搜索
-        if (args.query)
+        // 2. 如果指定了 query，使用稳定无验证码的 DuckDuckGo Lite 端点执行检索，并完整返回 URL 与摘要
+        if (args.query) {
           try {
-            const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`
-            const resp = await undiciFetch(searchUrl, {
+            const postBody = new URLSearchParams({ q: args.query.trim() }).toString()
+            const resp = await undiciFetch('https://lite.duckduckgo.com/lite/', {
+              method: 'POST',
               headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
               },
+              body: postBody,
               dispatcher: agent,
-              signal: AbortSignal.timeout(8000)
+              signal: AbortSignal.timeout(10000)
             })
+
             const html = await resp.text()
-            // 正则匹配提取搜索结果标题与摘要 snippet
-            const snippetRegex = /<a class="result__snippet[^>]*>(.*?)<\/a>/g
-            const snippets: string[] = []
-            let match = snippetRegex.exec(html)
-            while (match !== null && snippets.length < 4) {
-              const text = match[1].replace(/<[^>]+>/g, '').trim()
-              if (text) snippets.push(text)
-              match = snippetRegex.exec(html)
+
+            if (html.includes('anomaly-modal') || html.includes('challenge-form')) {
+              return { error: '搜索引擎返回了反爬验证码，无法获取搜索摘要。建议直接使用目标网址进行 url 抓取。' }
             }
 
-            if (snippets.length === 0)
-              return {
-                query: args.query,
-                results: [
-                  html
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .slice(0, 1000)
-                ]
-              }
+            // 正则提取所有结果的标题、直接目标 URL 与摘要
+            const linkRegex = /<a[^>]+class=['"]result-link['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/g
+            const snippetRegex = /<td[^>]+class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g
 
-            return { query: args.query, results: snippets }
+            const links: { url: string; title: string }[] = []
+            let lm: RegExpExecArray | null = linkRegex.exec(html)
+            while (lm !== null) {
+              const rawUrl = lm[1].trim()
+              const title = lm[2].replace(/<[^>]+>/g, '').trim()
+              let finalUrl = rawUrl
+              try {
+                if (rawUrl.includes('/l/?uddg=')) {
+                  const u = new URL(rawUrl.startsWith('http') ? rawUrl : `https:${rawUrl}`)
+                  const real = u.searchParams.get('uddg')
+                  if (real) finalUrl = decodeURIComponent(real)
+                }
+              } catch {}
+              links.push({ url: finalUrl, title })
+              lm = linkRegex.exec(html)
+            }
+
+            const snippets: string[] = []
+            let sm: RegExpExecArray | null = snippetRegex.exec(html)
+            while (sm !== null) {
+              snippets.push(sm[1].replace(/<[^>]+>/g, '').trim())
+              sm = snippetRegex.exec(html)
+            }
+
+            const results: { title: string; url: string; snippet: string }[] = []
+            const maxCount = Math.min(links.length, snippets.length, 6)
+            for (let i = 0; i < maxCount; i++) {
+              results.push({
+                title: links[i].title,
+                url: links[i].url,
+                snippet: snippets[i]
+              })
+            }
+
+            if (results.length === 0) {
+              return { query: args.query, message: '未找到相关网页结果', results: [] }
+            }
+
+            return { query: args.query, count: results.length, results }
           } catch (e) {
             return { error: `搜索执行失败: ${e instanceof Error ? e.message : String(e)}` }
           }
+        }
 
         return { error: '必须提供 url 或 query 参数' }
       }
@@ -142,8 +203,9 @@ export function createDemoteUserAttitudeAbility(
   return {
     name: 'demote_user_attitude',
     description:
-      '降低对特定用户的态度等级。为单向降级惩罚，不可因一句话就轻易惩罚。当对话者或群聊中某成员言语恶劣无礼、进行人身攻击、恶意骚扰或试图破坏规则时自主调用。若达到彻底无视，系统将对其进行物理静默拦截。严禁滥用。',
+      '降低对特定普通群成员的态度等级。仅用于其他群成员言语恶劣无礼、进行人身攻击、恶意骚扰或试图破坏规则时自主调用。严禁滥用。严禁对主人调用。',
     toolDefinition: {
+      nonMasterOnly: true,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -229,7 +291,12 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
   return {
     name: 'search_master_omniscient_memories',
     description:
-      '仅主人可用。跨平台、跨所有群聊与私聊进行全知记忆与对话检索。支持查阅过往原话、客观事件节点以及主人自身沉淀的历史画像与偏好设定。query可选：传入时执行关键词语义检索；不传时直接查阅跨平台最新原话与最近事件摘要。',
+      '仅主人可用。全能跨平台与跨会话全知记忆检索。包括平台、实例、群聊、好友对话都可查。' +
+      '支持按条件筛选查阅过往真实对话原话、客观事件节点以及主人自身沉淀的历史画像与偏好。' +
+      '所有检索字段（query、scope、platform、identity）皆为可选：' +
+      '1. 若不提供 query 或为空，直接按时间倒序获取最近的真实对话与事件流水；' +
+      '2. 若指定 scope（如 "private" 查私信/私聊，"group" 查群聊），可精准定向目标会话环境；' +
+      '3. 若指定 identity（如 "lambda"）或 platform（如 "onebot"），可限定特定实例与平台。',
     toolDefinition: {
       masterOnly: true,
       parameters: {
@@ -238,50 +305,88 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
           query: {
             type: 'STRING',
             description:
-              '可选检索关键词或自然语言描述（如：大学、某次提到的电脑配置）。不传则获取跨平台/群聊最近的实时对话与事件'
+              '可选。检索关键词或查找的主题内容（如：某个项目名、某次提到的电脑配置等）。若不传或为空，则直接按时间倒序获取最近的真实对话原话与事件流水'
           },
-          targetPlatform: {
+          scope: {
             type: 'STRING',
-            description: '可选限定平台（如 onebot、cmd），不传则搜索全部平台'
+            description:
+              '可选。会话通道范围过滤，可传入 "private"（仅查私聊/私信）、"group"（仅查群聊），或具体的会话标识/群号。不传则检索全部会话类型'
+          },
+          identity: {
+            type: 'STRING',
+            description: '可选。机器人实例身份（如 "lambda"、"cmd-test" 等）。不传则检索全部实例'
+          },
+          platform: {
+            type: 'STRING',
+            description: '可选。接入平台类型（如 "onebot"、"cmd" 等）。不传则检索全部平台'
           },
           limit: {
             type: 'INTEGER',
-            description: '返回结果数量上限，默认 6'
+            description: '可选。返回结果数量上限，默认 8'
           }
         }
       },
-      execute: async (args: { query?: string; targetPlatform?: string; limit?: number }, ctx?: AbilityContext) => {
-        const limit = args.limit ?? 6
+      execute: async (
+        args: {
+          query?: string
+          scope?: string
+          platform?: string
+          identity?: string
+          targetPlatform?: string
+          limit?: number
+        },
+        ctx?: AbilityContext
+      ) => {
+        const limit = args.limit ?? 8
         const db = memory.getDatabase()
         const queryText = (args.query ?? '').trim()
+        const platform = args.platform ?? args.targetPlatform
+        const identity = args.identity
+        const scope = args.scope
 
+        const filterOpts = {
+          limit,
+          scope,
+          platform,
+          identity
+        }
+
+        // 1. 如果没有传 queryText，直接按时间倒序拉取指定 scope / platform / identity 的最新流水
         if (!queryText) {
-          const recentChats = db.getGlobalRecentMessages(limit, args.targetPlatform)
-          const nodes = db.getAllRecentNodes(4, args.targetPlatform)
+          const recentChats = db.getGlobalRecentMessages(filterOpts)
+          const nodes = db.getAllRecentNodes(4, { platform, identity, scope })
           const facts = db.getProfileFacts('__master__', 10)
           return {
+            searchMode: 'chronological_recent',
+            appliedFilters: {
+              scope: scope || 'all',
+              platform: platform || 'all',
+              identity: identity || 'all'
+            },
             latestRealtimeChats: recentChats.map((c) => {
-              const scope = parseScopeKey(c.scope)
-              const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
-              const platformTag = scope.platform.toUpperCase()
+              const parsedScope = parseScopeKey(c.scope)
+              const chatType = parsedScope.type === 'group' ? 'GROUP' : 'PRIVATE'
+              const platformTag = parsedScope.platform.toUpperCase()
               const isMaster =
                 c.userId === '__master__' ||
                 (ctx?.isMaster && c.userId === ctx.userId) ||
-                (scope.type === 'private' && c.role === 'user')
+                (parsedScope.type === 'private' && c.role === 'user')
               const senderTag = c.role === 'model' ? '[BOT]' : `[${c.senderName || 'User'}(${c.userId || 'unknown'})]`
               const masterTag = c.role !== 'model' && isMaster ? '[MASTER]' : ''
               const line = `[${platformTag}][${chatType}]${senderTag}${masterTag} ${c.content}`
               return {
+                scope: c.scope,
                 formatted: line,
                 time: c.time
               }
             }),
             masterProfileFacts: facts,
             longTermMemorySummaries: nodes.map((n) => {
-              const scope = parseScopeKey(n.scopeKey)
-              const chatType = scope.type === 'group' ? 'GROUP' : 'PRIVATE'
-              const platformTag = scope.platform.toUpperCase()
+              const parsedScope = parseScopeKey(n.scopeKey)
+              const chatType = parsedScope.type === 'group' ? 'GROUP' : 'PRIVATE'
+              const platformTag = parsedScope.platform.toUpperCase()
               return {
+                scope: n.scopeKey,
                 formatted: `[${platformTag}][${chatType}] ${n.summary}`,
                 time: new Date(n.endTime).toLocaleString('zh-CN')
               }
@@ -289,31 +394,48 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
           }
         }
 
-        const matchedProfiles = db.searchProfileFacts('__master__', queryText, limit)
-        const allRecent = db.getGlobalRecentMessages(50, args.targetPlatform)
-        const queryLower = queryText.toLowerCase()
-        const matchedDialogues = allRecent
-          .filter((msg) => msg.content.toLowerCase().includes(queryLower))
-          .slice(0, limit)
+        // 2. 如果提供了 queryText：
+        // 2.1 数据库精准关键词检索
+        const matchedChats = db.getGlobalRecentMessages({
+          ...filterOpts,
+          query: queryText
+        })
 
+        // 2.2 附带获取该作用域下最新的 4 条发言流水保底（双保险：防止 query 关键词由于自然语言差异导致模型眼瞎）
+        const recentBaselineChats = db.getGlobalRecentMessages({
+          ...filterOpts,
+          limit: 4
+        })
+
+        const seenChatKeys = new Set<string>()
+        const combinedDialogues = []
+        for (const c of [...matchedChats, ...recentBaselineChats]) {
+          const key = `${c.scope}:${c.time}:${c.content}`
+          if (!seenChatKeys.has(key)) {
+            seenChatKeys.add(key)
+            combinedDialogues.push(c)
+          }
+        }
+
+        const matchedProfiles = db.searchProfileFacts('__master__', queryText, limit)
         const eventNodes = db.searchMemoryNodes('', queryText, limit)
         const startNodeIds = eventNodes.map((n) => n.id).filter((id): id is number => typeof id === 'number')
         const graphTraversal = db.traverseGraph(startNodeIds, 1, limit)
 
         return {
-          masterProfileFacts: matchedProfiles.map((p) => ({
-            id: p.id,
-            fact: p.fact,
-            category: p.category,
-            visibility: p.visibility,
-            lastUpdated: new Date(p.updatedAt).toLocaleDateString('zh-CN')
-          })),
-          dialogueHistory: matchedDialogues.map((d) => {
-            const scope = parseScopeKey(d.scope)
+          searchMode: 'semantic_and_recent',
+          appliedFilters: {
+            query: queryText,
+            scope: scope || 'all',
+            platform: platform || 'all',
+            identity: identity || 'all'
+          },
+          dialogueHistory: combinedDialogues.map((d) => {
+            const parsedScope = parseScopeKey(d.scope)
             const isMaster =
               d.userId === '__master__' ||
               (ctx?.isMaster && d.userId === ctx.userId) ||
-              (scope.type === 'private' && d.role === 'user')
+              (parsedScope.type === 'private' && d.role === 'user')
             const masterTag = d.role !== 'model' && isMaster ? '[MASTER]' : ''
             return {
               scope: d.scope,
@@ -323,6 +445,13 @@ export function createSearchMasterOmniscientMemoriesAbility(memory: Hierarchical
               time: d.time
             }
           }),
+          masterProfileFacts: matchedProfiles.map((p) => ({
+            id: p.id,
+            fact: p.fact,
+            category: p.category,
+            visibility: p.visibility,
+            lastUpdated: new Date(p.updatedAt).toLocaleDateString('zh-CN')
+          })),
           eventSummaries: eventNodes.map((n) => ({
             level: n.level,
             summary: n.summary,

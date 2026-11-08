@@ -11,6 +11,7 @@ export interface AbilityContext {
 export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = unknown> {
   readonly parameters?: Record<string, unknown>
   readonly masterOnly?: boolean
+  readonly nonMasterOnly?: boolean
   readonly execute: (args: Args, ctx: AbilityContext) => Promise<Result>
 }
 
@@ -51,16 +52,20 @@ export class AbilityManager {
     return list
   }
 
-  public getGeminiFunctionDeclarations(_isMaster: boolean): Record<string, unknown>[] {
+  public getGeminiFunctionDeclarations(isMaster: boolean): Record<string, unknown>[] {
     const declarations: Record<string, unknown>[] = []
     for (const ability of this.abilities.values()) {
-      if (ability.toolDefinition) {
-        declarations.push({
-          name: ability.name,
-          description: ability.description,
-          parameters: ability.toolDefinition.parameters ?? { type: 'OBJECT', properties: {} }
-        })
-      }
+      if (!ability.toolDefinition) continue
+      // 仅主人可用工具：若当前非主人，直接从工具列表中剔除，不向模型暴露
+      if (ability.toolDefinition.masterOnly && !isMaster) continue
+      // 仅非主人可用工具（例如对恶意成员的态度降级）：若当前是主人，直接从工具列表中剔除，物理杜绝背刺主人
+      if (ability.toolDefinition.nonMasterOnly && isMaster) continue
+
+      declarations.push({
+        name: ability.name,
+        description: ability.description,
+        parameters: ability.toolDefinition.parameters ?? { type: 'OBJECT', properties: {} }
+      })
     }
     return declarations
   }
@@ -74,7 +79,16 @@ export class AbilityManager {
       return {
         success: false,
         error: 'PERMISSION_DENIED',
-        message: `操作失败：当前对话者无权调用此工具。`
+        message: '操作失败：当前对话者无权调用此工具。'
+      }
+    }
+
+    if (ability.toolDefinition.nonMasterOnly && ctx.isMaster) {
+      this.logger?.warn(`Blocked: tool [${name}] cannot be invoked on master`)
+      return {
+        success: false,
+        error: 'FORBIDDEN_FOR_MASTER',
+        message: '该工具严禁对主人使用。'
       }
     }
 

@@ -404,19 +404,40 @@ export class MemoryDatabase {
     }
   }
 
-  public getAllRecentNodes(limit: number, platformFilter?: string): MemoryNode[] {
-    if (platformFilter) {
-      return this.db
-        .prepare(
-          'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes WHERE scope_key LIKE ? ORDER BY end_time DESC LIMIT ?'
-        )
-        .all(`${platformFilter}:%`, limit) as unknown as MemoryNode[]
+  public getAllRecentNodes(
+    limit: number,
+    filter?: string | { platform?: string; identity?: string; scope?: string }
+  ): MemoryNode[] {
+    const f = typeof filter === 'string' ? { platform: filter } : filter
+    const conditions: string[] = []
+    const params: (string | number)[] = []
+
+    if (f?.identity?.trim()) {
+      conditions.push('scope_key LIKE ?')
+      params.push(`${f.identity.trim()}:%`)
     }
-    return this.db
-      .prepare(
-        'SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ORDER BY end_time DESC LIMIT ?'
-      )
-      .all(limit) as unknown as MemoryNode[]
+    if (f?.platform?.trim()) {
+      const p = f.platform.trim()
+      conditions.push('(scope_key LIKE ? OR scope_key LIKE ?)')
+      params.push(`${p}:%`, `%:${p}:%`)
+    }
+    if (f?.scope?.trim()) {
+      const s = f.scope.trim().toLowerCase()
+      if (s === 'private' || s === '私聊' || s === '私信') {
+        conditions.push("scope_key LIKE '%:private:%'")
+      } else if (s === 'group' || s === '群' || s === '群聊') {
+        conditions.push("scope_key LIKE '%:group:%'")
+      } else {
+        conditions.push('scope_key LIKE ?')
+        params.push(`%${f.scope.trim()}%`)
+      }
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    const sql = `SELECT id, level, scope_key as scopeKey, summary, tags, start_time as startTime, end_time as endTime, created_at as createdAt FROM memory_nodes ${whereClause} ORDER BY end_time DESC LIMIT ?`
+    params.push(limit)
+
+    return this.db.prepare(sql).all(...params) as unknown as MemoryNode[]
   }
 
   public getProfileFactRecords(
@@ -593,8 +614,16 @@ export class MemoryDatabase {
    * 调取跨会话/跨平台的全局最新近期原话（不依赖满10轮压缩）
    */
   public getGlobalRecentMessages(
-    limit = 8,
-    platformFilter?: string
+    options:
+      | number
+      | {
+          limit?: number
+          query?: string
+          scope?: string
+          platform?: string
+          identity?: string
+        } = 8,
+    legacyPlatformFilter?: string
   ): {
     scope: string
     role: string
@@ -603,12 +632,49 @@ export class MemoryDatabase {
     content: string
     time: string
   }[] {
-    const query = platformFilter
-      ? 'SELECT scope_key, role, user_id, sender_name, content, created_at FROM recent_messages WHERE scope_key LIKE ? ORDER BY id DESC LIMIT ?'
-      : 'SELECT scope_key, role, user_id, sender_name, content, created_at FROM recent_messages ORDER BY id DESC LIMIT ?'
-    const rows = (
-      platformFilter ? this.db.prepare(query).all(`${platformFilter}:%`, limit) : this.db.prepare(query).all(limit)
-    ) as {
+    const opts = typeof options === 'number' ? { limit: options, platform: legacyPlatformFilter } : options
+
+    const limit = opts.limit ?? 8
+    const conditions: string[] = []
+    const params: (string | number)[] = []
+
+    // 1. identity 过滤：例如 "lambda"，匹配 scope_key 起始的 identity:
+    if (opts.identity?.trim()) {
+      conditions.push('scope_key LIKE ?')
+      params.push(`${opts.identity.trim()}:%`)
+    }
+
+    // 2. platform 过滤：例如 "onebot"，匹配前缀或通道中的平台标识
+    if (opts.platform?.trim()) {
+      const p = opts.platform.trim()
+      conditions.push('(scope_key LIKE ? OR scope_key LIKE ?)')
+      params.push(`${p}:%`, `%:${p}:%`)
+    }
+
+    // 3. scope 过滤：支持 private（私聊）、group（群聊）或具体的 scope_key / 会话标识符
+    if (opts.scope?.trim()) {
+      const s = opts.scope.trim().toLowerCase()
+      if (s === 'private' || s === '私聊' || s === '私信') {
+        conditions.push("scope_key LIKE '%:private:%'")
+      } else if (s === 'group' || s === '群' || s === '群聊') {
+        conditions.push("scope_key LIKE '%:group:%'")
+      } else {
+        conditions.push('scope_key LIKE ?')
+        params.push(`%${opts.scope.trim()}%`)
+      }
+    }
+
+    // 4. query 过滤：若传了关键词，模糊匹配 content；若未传，则纯按时间流输出
+    if (opts.query?.trim()) {
+      conditions.push('content LIKE ?')
+      params.push(`%${opts.query.trim()}%`)
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    const sql = `SELECT scope_key, role, user_id, sender_name, content, created_at FROM recent_messages ${whereClause} ORDER BY id DESC LIMIT ?`
+    params.push(limit)
+
+    const rows = this.db.prepare(sql).all(...params) as {
       scope_key: string
       role: string
       user_id: string
