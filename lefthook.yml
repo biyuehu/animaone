@@ -1,0 +1,8 @@
+pre-commit:
+  parallel: false
+  commands:
+    fix:
+      run: pnpm run fix
+      stage_fixed: true
+    typecheck:
+      run: pnpm exec tsc --project modules/chat-ai/tsconfig.json --noEmit
