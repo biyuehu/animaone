@@ -14,8 +14,6 @@ const execAsync = promisify(exec)
 export const SILENT_SENTINEL = '__NO_REPLY__'
 
 export function createDreamReflectionAbility(memory: HierarchicalMemoryService, cooldownSeconds = 900): Ability {
-  let lastDreamTime = 0
-
   return {
     name: 'trigger_dream_reflection',
     description:
@@ -25,7 +23,7 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
       parameters: { type: 'OBJECT', properties: {} },
       execute: async () => {
         const now = Date.now()
-        const elapsed = (now - lastDreamTime) / 1000
+        const elapsed = (now - memory.getLastDreamTime()) / 1000
         if (elapsed < cooldownSeconds) {
           const waitMinutes = Math.ceil((cooldownSeconds - elapsed) / 60)
           return {
@@ -34,7 +32,6 @@ export function createDreamReflectionAbility(memory: HierarchicalMemoryService, 
           }
         }
 
-        lastDreamTime = now
         const res = await memory.triggerDream('__master__')
         if (!res) {
           return {

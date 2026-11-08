@@ -26,6 +26,8 @@ export class HierarchicalMemoryService {
   private readonly activeMemoryCapacity: number
   private readonly idleCompactTimeout: number
   private readonly enableDreamReflection: boolean
+  private readonly dreamCooldown: number
+  private lastDreamTime = 0
 
   constructor(
     geminiClient: GeminiClient,
@@ -37,6 +39,7 @@ export class HierarchicalMemoryService {
     summarizerConfig: SummarizerConfig,
     idleCompactTimeout: number,
     enableDreamReflection: boolean,
+    dreamCooldown = 900,
     logger?: Logger
   ) {
     this.maxTurns = maxTurns
@@ -45,6 +48,7 @@ export class HierarchicalMemoryService {
     this.activeMemoryCapacity = activeMemoryCapacity
     this.idleCompactTimeout = idleCompactTimeout
     this.enableDreamReflection = enableDreamReflection
+    this.dreamCooldown = dreamCooldown
     this.db = new MemoryDatabase(dbPath)
     this.slidingWindow = new SlidingWindowMemory(maxTurns)
     this.logger = logger?.label('HierarchicalMemory')
@@ -149,9 +153,18 @@ export class HierarchicalMemoryService {
   }
 
   public async triggerDream(masterId: string): Promise<DreamReflectionResult | null> {
+    this.lastDreamTime = Date.now()
     const res = this.summarizer ? await this.summarizer.dreamReflection(masterId) : null
     if (res?.spoken) this.pendingDreamSpoken = res.spoken
     return res
+  }
+
+  public getLastDreamTime(): number {
+    return this.lastDreamTime
+  }
+
+  public getDreamCooldown(): number {
+    return this.dreamCooldown
   }
 
   public consumePendingDream(): string | null {
@@ -200,10 +213,23 @@ export class HierarchicalMemoryService {
     }
 
     const hour = new Date(now).getHours()
-    if (this.enableDreamReflection && hour >= 2 && hour < 5 && Math.random() < 0.3)
+    const elapsedSec = (now - this.lastDreamTime) / 1000
+    // 凌晨闲暇做梦：
+    // 1. 限定在 2:00 ~ 5:00
+    // 2. 严格受冷却时间控制（默认15分钟），杜绝每隔3分钟心跳重复连续做梦
+    // 3. 若上一场梦境产生的台词尚未分享给主人（pendingDreamSpoken 存在），不再重复做梦覆盖
+    if (
+      this.enableDreamReflection &&
+      hour >= 2 &&
+      hour < 5 &&
+      elapsedSec >= this.dreamCooldown &&
+      !this.pendingDreamSpoken &&
+      Math.random() < 0.3
+    ) {
       await this.triggerDream('__master__').catch((err) => {
         this.logger?.error(`Failed to trigger dream reflection: ${err instanceof Error ? err.message : String(err)}`)
       })
+    }
   }
 
   public getDatabase(): MemoryDatabase {

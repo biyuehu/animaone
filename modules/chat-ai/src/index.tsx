@@ -127,6 +127,7 @@ export function main(ctx: Context, cfg: Config) {
     },
     cfg.idleCompactTimeout,
     cfg.enableDreamReflection,
+    cfg.dreamCooldown,
     ctx.logger
   )
 
@@ -201,7 +202,7 @@ export function main(ctx: Context, cfg: Config) {
 
   ctx
     .command('calm [duration:number] - 让机器人冷静一个跟回周期，暂停当前会话的主动回复')
-    .access(UserAccess.ADMIN)
+    .access(UserAccess.MANGER)
     .action((data, session) => {
       const adapter = session.api.adapter
       const groupId = session.groupId ? String(session.groupId) : undefined
@@ -220,7 +221,7 @@ export function main(ctx: Context, cfg: Config) {
 
   ctx
     .command('attitude [user] - 查看用户的态度坏感度等级')
-    .access(UserAccess.ADMIN)
+    .access(UserAccess.MEMBER)
     .action((data, session) => {
       const adapter = session.api.adapter
       let targetId = extractUserId(data.args[0])
@@ -239,12 +240,11 @@ export function main(ctx: Context, cfg: Config) {
       if (!targetId) targetId = String(session.userId)
 
       const attitude = memory.getUserAttitude(`${adapter.identity}:${targetId}`)
-      return `用户 ${targetId} 当前态度：【${attitude.statusText}】(等级: ${attitude.level}/4)${attitude.reason ? `\n原因：“${attitude.reason}”` : ''}`
+      return `用户 ${targetId} 当前态度：【${attitude.statusText}】(等级: ${attitude.level}/4)${attitude.reason ? `\n原因：${attitude.reason}` : ''}`
     })
 
   ctx
     .command('setattitude <user> <level:number> - 设置用户的坏感度态度等级（0~4，0为赦免）')
-    .alias(['set-attitude'])
     .access(UserAccess.ADMIN)
     .action((data, session) => {
       const adapter = session.api.adapter
@@ -270,7 +270,7 @@ export function main(ctx: Context, cfg: Config) {
 
   ctx
     .command('flush - 清空当前会话的短期上下文记忆')
-    .access(UserAccess.ADMIN)
+    .access(UserAccess.MANGER)
     .action((_, session) => {
       const adapter = session.api.adapter
       const scopeKey = session.groupId
@@ -284,84 +284,6 @@ export function main(ctx: Context, cfg: Config) {
 
   ctx
     .command('dream - 强制执行一次潜意识梦境顿悟推演')
-    .access(UserAccess.ADMIN)
-    .action(async (_, session) => {
-      session.quick('正在入梦推演中，请稍候...')
-      const res = await memory.triggerDream('__master__')
-      if (res?.spoken) {
-        return `梦境推演成功！顿悟灵感：“${res.spoken}”`
-      }
-      return '梦境推演未产生新的灵感（记忆节点不足或推演无产出）。'
-    })
-
-  ctx
-    .command('attitude [user] - 查看用户的态度坏感度等级')
-    .access(UserAccess.ADMIN)
-    .action((data, session) => {
-      const adapter = session.api.adapter
-      let targetId = extractUserId(data.args[0])
-
-      if (!targetId) {
-        const rawMsg = (session.messageAlt ?? session.message) || ''
-        const replyId = rawMsg.match(/\[CQ:reply,id=(-?\d+)\]/i)?.[1]
-        if (replyId) {
-          const scopeKey = session.groupId
-            ? `${adapter.identity}:${session.groupId}`
-            : `${adapter.identity}:${session.userId}`
-          const quoted = memory.findQuotedMessage(scopeKey, replyId)
-          if (quoted?.userId) targetId = quoted.userId
-        }
-      }
-      if (!targetId) targetId = String(session.userId)
-
-      const attitude = memory.getUserAttitude(`${adapter.identity}:${targetId}`)
-      return `用户 ${targetId} 当前态度：【${attitude.statusText}】(等级: ${attitude.level}/4)${attitude.reason ? `\n原因：“${attitude.reason}”` : ''}`
-    })
-
-  ctx
-    .command('setattitude <user> <level:number> - 设置用户的坏感度态度等级（0~4，0为赦免）')
-    .alias(['setattiude', 'set-attitude'])
-    .access(UserAccess.ADMIN)
-    .action((data, session) => {
-      const adapter = session.api.adapter
-      const targetId = extractUserId(data.args[0])
-      const level = Number(data.args[1])
-
-      if (!targetId) return '未能定位目标用户，请传入用户 QQ 号或 @目标成员。'
-      if (Number.isNaN(level) || level < 0 || level > 4) return '态度等级必须为 0 ~ 4 的整数（0为恢复正常/赦免）。'
-
-      const masterId = String((adapter.config as AdapterConfig)?.master || '')
-      if (targetId === masterId || targetId === '__master__') {
-        return '操作被拒绝：严禁更改主人的态度等级。'
-      }
-
-      const res = memory.setUserAttitude(`${adapter.identity}:${targetId}`, level, `管理员(${session.userId})手动设置`)
-
-      ctx.logger.info(
-        `[Attitude Set] User ${targetId} (identity: ${adapter.identity}) attitude set to [${res.statusText}] (level ${res.newLevel}) by ADMIN ${session.userId}`
-      )
-
-      return `已成功将用户 ${targetId} 的态度调整为【${res.statusText}】(等级: ${res.newLevel}/4)。`
-    })
-
-  ctx
-    .command('flush - 清空当前会话的短期上下文记忆')
-    .shortcut(['清空会话', '清空记忆'])
-    .access(UserAccess.ADMIN)
-    .action((_, session) => {
-      const adapter = session.api.adapter
-      const scopeKey = session.groupId
-        ? formatScopeKey(groupScope(adapter.identity, String(session.groupId)))
-        : formatScopeKey(privateScope(adapter.identity, String(session.userId)))
-
-      memory.clearShortTerm(scopeKey)
-      ctx.logger.info(`[ShortTerm Flushed] Scope <blue>${scopeKey}</blue> flushed by ADMIN ${session.userId}`)
-      return '已清空当前会话的短期上下文记忆。'
-    })
-
-  ctx
-    .command('dream - 强制执行一次潜意识梦境顿悟推演')
-    .shortcut(['入梦', '做梦'])
     .access(UserAccess.ADMIN)
     .action(async (_, session) => {
       session.quick('正在入梦推演中，请稍候...')

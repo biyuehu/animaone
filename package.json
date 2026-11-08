@@ -6,6 +6,7 @@
   "license": "GPL-3.0-only",
   "author": "Romi <biyuehuya@gmail.com>",
   "scripts": {
+    "start": "npm run build && kotori",
     "serve": "kotori",
     "build": "tsx build --types --ignoreError",
     "dev:only": "tsx build --silent && tsx node_modules/kotori-bot/bin --mode dev",
@@ -24,11 +25,11 @@
   ],
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
-    "@types/node": "^26",
-    "nodemon": "^3",
-    "tsup": "^8",
-    "tsx": "^4",
-    "typescript": "^7"
+    "@types/node": "^26.6.6",
+    "nodemon": "^3.1.14",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "packageManager": "pnpm@8.7.4+",
   "engines": {
@@ -52,23 +53,16 @@
   "dependencies": {
     "@kotori-bot/kotori-plugin-access": "^1.0.2",
     "@kotori-bot/kotori-plugin-adapter-cmd": "^1.1.1",
-    "@kotori-bot/kotori-plugin-adapter-onebot": "^2.2.0",
+    "@kotori-bot/kotori-plugin-adapter-onebot": "^2.2.2",
     "@kotori-bot/kotori-plugin-adapter-sandbox": "^1.1.1",
     "@kotori-bot/kotori-plugin-alias": "^1.0.3",
-    "@kotori-bot/kotori-plugin-core": "^1.5.2",
+    "@kotori-bot/kotori-plugin-core": "^1.6.2",
     "@kotori-bot/kotori-plugin-filter": "^1.1.0",
     "@kotori-bot/kotori-plugin-helper": "^1.4.0",
     "@kotori-bot/kotori-plugin-status": "^1.0.0",
-    "@kotori-bot/kotori-plugin-webui": "^1.5.3",
-    "kotori-bot": "^1.7.6",
-    "kotori-plugin-requester": "^1.1.3",
-    "undici": "^8.12.3"
-  },
-  "pnpm": {
-    "overrides": {
-      "@kotori-bot/kotori-plugin-adapter-onebot": "link:../kotorijs/kotori-bot/modules/platform/adapter-onebot",
-      "@kotori-bot/loader": "link:../kotorijs/kotori-bot/packages/loader",
-      "kotori-bot": "link:../kotorijs/kotori-bot/packages/kotori"
-    }
+    "@kotori-bot/kotori-plugin-webui": "^1.5.6",
+    "kotori-bot": "^1.7.8",
+    "kotori-plugin-requester": "^1.2.0",
+    "undici": "^8.12.4"
   }
 }

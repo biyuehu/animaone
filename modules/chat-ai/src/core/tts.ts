@@ -18,12 +18,16 @@ export interface SpeechSegment {
 
 /**
  * 提取文本中的 [voice: 文本] 或 [voice(ja): 文本] 标签，将其分离为文字段与语音段
+ * 规则：
+ * 1. 单轮回复最多只提取 1 条有效语音，后续多余语音标签自动降级为普通文字段，防止多条语音连发刷屏；
+ * 2. 语种校验：若声明为 ja 但句子长度 > 5 且完全不包含日文假名（如误将中文释义包裹入 voice(ja)），自动降级为普通文字；
  */
 export function parseVoiceSegments(text: string): SpeechSegment[] {
   const segments: SpeechSegment[] = []
   const regex = /\[voice(?:\(([a-zA-Z_-]+)\))?:\s*([^\]]+)\]/gi
   let lastIndex = 0
   let match: RegExpExecArray | null = regex.exec(text)
+  let voiceCount = 0
 
   while (match !== null) {
     if (match.index > lastIndex) {
@@ -33,11 +37,24 @@ export function parseVoiceSegments(text: string): SpeechSegment[] {
     const specifiedLang = match[1]?.trim().toLowerCase()
     const voiceText = match[2]?.trim()
     if (voiceText) {
-      segments.push({
-        isVoice: true,
-        content: voiceText,
-        lang: specifiedLang || 'auto'
-      })
+      // 语种校验：若声明为 ja 但较长句子完全不含平假名或片假名，判定为误标的中文/非日文内容
+      const hasJapaneseKana = /[\u3040-\u309F\u30A0-\u30FF]/.test(voiceText)
+      const isMismatchedJa = specifiedLang === 'ja' && voiceText.length > 5 && !hasJapaneseKana
+
+      if (voiceCount === 0 && !isMismatchedJa) {
+        voiceCount++
+        segments.push({
+          isVoice: true,
+          content: voiceText,
+          lang: specifiedLang || 'auto'
+        })
+      } else {
+        // 多于1条语音，或语音标签语种错配（如把中文塞进了 voice(ja)），安全降级为普通文字
+        segments.push({
+          isVoice: false,
+          content: voiceText
+        })
+      }
     }
     lastIndex = regex.lastIndex
     match = regex.exec(text)
