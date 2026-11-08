@@ -19,7 +19,7 @@ export class HierarchicalMemoryService {
   private readonly uncommittedChatCount: Map<string, number> = new Map()
   private readonly activeChatBuffer: Map<string, { role: 'user' | 'model'; content: string; timestamp: number }[]> =
     new Map()
-  private readonly masterSpeechBuffer: string[] = []
+  private readonly masterSpeechBuffer: { text: string; scopeKey: string }[] = []
   private pendingDreamSpoken: string | null = null
   private readonly maxTurns: number
   private readonly summaryInterval: number
@@ -131,15 +131,25 @@ export class HierarchicalMemoryService {
 
     if (isMaster && this.summarizer) {
       if (userMsg.trim().length >= 3 && !/^(\[图片[^\]]*\]|\[表情[^\]]*\]|[0-9]+)$/.test(userMsg.trim()))
-        this.masterSpeechBuffer.push(userMsg.trim())
+        this.masterSpeechBuffer.push({ text: userMsg.trim(), scopeKey })
 
       if (this.masterSpeechBuffer.length >= this.summaryInterval) {
         const speechToExtract = [...this.masterSpeechBuffer]
         this.masterSpeechBuffer.length = 0
         this.logger?.info(`Extracting master profile facts (${speechToExtract.length} messages)`)
-        this.summarizer.extractUserProfile('__master__', speechToExtract, scopeKey).catch((err) => {
-          this.logger?.error(`Failed to extract master profile: ${err instanceof Error ? err.message : String(err)}`)
-        })
+        const isAnyPrivate = speechToExtract.some((m) => parseScopeKey(m.scopeKey).type === 'private')
+        const effectiveScope = isAnyPrivate
+          ? (speechToExtract.find((m) => parseScopeKey(m.scopeKey).type === 'private')?.scopeKey ?? scopeKey)
+          : scopeKey
+        this.summarizer
+          .extractUserProfile(
+            '__master__',
+            speechToExtract.map((m) => m.text),
+            effectiveScope
+          )
+          .catch((err) => {
+            this.logger?.error(`Failed to extract master profile: ${err instanceof Error ? err.message : String(err)}`)
+          })
       }
     }
   }
@@ -208,9 +218,19 @@ export class HierarchicalMemoryService {
       const speechToExtract = [...this.masterSpeechBuffer]
       this.masterSpeechBuffer.length = 0
       this.logger?.info(`Heartbeat flushing master speech buffer (${speechToExtract.length} messages)`)
-      await this.summarizer.extractUserProfile('__master__', speechToExtract).catch((err) => {
-        this.logger?.error(`Failed to flush master profile: ${err instanceof Error ? err.message : String(err)}`)
-      })
+      const isAnyPrivate = speechToExtract.some((m) => parseScopeKey(m.scopeKey).type === 'private')
+      const effectiveScope = isAnyPrivate
+        ? speechToExtract.find((m) => parseScopeKey(m.scopeKey).type === 'private')?.scopeKey
+        : speechToExtract[0]?.scopeKey
+      await this.summarizer
+        .extractUserProfile(
+          '__master__',
+          speechToExtract.map((m) => m.text),
+          effectiveScope
+        )
+        .catch((err) => {
+          this.logger?.error(`Failed to flush master profile: ${err instanceof Error ? err.message : String(err)}`)
+        })
     }
 
     const hour = new Date(now).getHours()

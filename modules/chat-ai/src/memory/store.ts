@@ -288,19 +288,25 @@ export class MemoryDatabase {
     sourceScope?: string,
     sourceContext?: string
   ): void {
+    // 对于主人的 private 会话：无条件设置为 private
+    let finalVisibility = visibility
+    if (userId === '__master__' && (sourceScope?.includes(':private:') || sourceScope?.includes('private'))) {
+      finalVisibility = 'private'
+    }
+
     const exists = this.db.prepare('SELECT id FROM user_profiles WHERE user_id = ? AND fact = ?').get(userId, fact)
     if (exists) {
       this.db
         .prepare(
           'UPDATE user_profiles SET weight = weight + 1, visibility = ?, source_scope = ?, source_context = ?, updated_at = ? WHERE user_id = ? AND fact = ?'
         )
-        .run(visibility, sourceScope ?? '', sourceContext ?? '', Date.now(), userId, fact)
+        .run(finalVisibility, sourceScope ?? '', sourceContext ?? '', Date.now(), userId, fact)
     } else {
       this.db
         .prepare(
           'INSERT INTO user_profiles (user_id, fact, category, visibility, source_scope, source_context, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
         )
-        .run(userId, fact, category, visibility, sourceScope ?? '', sourceContext ?? '', Date.now())
+        .run(userId, fact, category, finalVisibility, sourceScope ?? '', sourceContext ?? '', Date.now())
     }
   }
 
