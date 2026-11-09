@@ -32,7 +32,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@8.7.4+",
+  "packageManager": "pnpm@8.7.4",
   "engines": {
     "node": ">=17.9.0"
   },
