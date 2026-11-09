@@ -274,7 +274,8 @@ export function createRememberAbility(memory: HierarchicalMemoryService): Abilit
       },
       execute: async (args: { fact: string; category?: string; visibility?: string }, ctx?: AbilityContext) => {
         const cat = (args.category ?? 'preference') as 'preference' | 'identity' | 'event' | 'relation'
-        const vis = args.visibility === 'public' ? 'public' : 'private'
+        const isPrivateChat = !ctx?.groupId
+        const vis = isPrivateChat ? 'private' : args.visibility === 'public' ? 'public' : 'private'
         const sourceScope = ctx
           ? ctx.groupId
             ? `${ctx.platform}:group:${ctx.groupId}`

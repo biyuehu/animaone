@@ -169,7 +169,13 @@ ${recentMessages.join('\n')}`
         if (!match) continue
 
         const category: FactCategory = (match[1]?.toLowerCase() as FactCategory) || 'preference'
-        const visibility = match[2]?.toLowerCase() === 'public' ? 'public' : 'private'
+        const isPrivateScope = !sourceScope || sourceScope.includes(':private:') || sourceScope.includes('private')
+        const visibility =
+          userId === '__master__' && isPrivateScope
+            ? 'private'
+            : match[2]?.toLowerCase() === 'public'
+              ? 'public'
+              : 'private'
         const fact = (match[3] || '').trim()
         if (!fact || fact.length < 3) continue
 

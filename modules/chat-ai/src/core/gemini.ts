@@ -170,9 +170,14 @@ export class GeminiClient {
         await onImmediateText(textResult)
       }
 
-      const callNames = functionCalls.map((c) => `<cyan>${c.name}</cyan>`).join(', ')
+      const callSummaries = functionCalls
+        .map((c) => {
+          const argsStr = c.args ? JSON.stringify(c.args) : '{}'
+          return `<cyan>${c.name}</cyan>(${argsStr})`
+        })
+        .join(', ')
       this.logger?.info(
-        `Loop <yellow>${loops}</yellow>: Function call triggered [${callNames}] (<yellow>${loopDuration}ms</yellow>)`
+        `Loop <yellow>${loops}</yellow>: Function call triggered [${callSummaries}] (<yellow>${loopDuration}ms</yellow>)`
       )
 
       contents.push(
@@ -187,11 +192,14 @@ export class GeminiClient {
 
       for (const call of functionCalls) {
         const callName = call.name ?? ''
+        const callArgsStr = call.args ? JSON.stringify(call.args) : '{}'
         const toolStartTime = Date.now()
         try {
           const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
           const toolDuration = Date.now() - toolStartTime
-          this.logger?.info(`Tool <cyan>${callName}</cyan> completed in <yellow>${toolDuration}ms</yellow>`)
+          this.logger?.info(
+            `Tool <cyan>${callName}</cyan> completed in <yellow>${toolDuration}ms</yellow> (args: ${callArgsStr})`
+          )
           if (
             callName === 'choose_silence' ||
             (typeof toolResult === 'object' && toolResult !== null && 'silent' in toolResult && toolResult.silent)
@@ -205,7 +213,7 @@ export class GeminiClient {
         } catch (err) {
           const toolDuration = Date.now() - toolStartTime
           this.logger?.error(
-            `Tool <cyan>${callName}</cyan> failed in <yellow>${toolDuration}ms</yellow>: <red>${err instanceof Error ? err.message : String(err)}</red>`
+            `Tool <cyan>${callName}</cyan> failed in <yellow>${toolDuration}ms</yellow> (args: ${callArgsStr}): <red>${err instanceof Error ? err.message : String(err)}</red>`
           )
           functionResponseParts.push({
             functionResponse: { name: callName, response: { error: err instanceof Error ? err.message : String(err) } }
