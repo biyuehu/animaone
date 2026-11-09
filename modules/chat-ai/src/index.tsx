@@ -48,6 +48,7 @@ export const config = Tsu.Object({
   allowedInstances: Tsu.Array(Tsu.String())
     .default([])
     .describe('允许响应用于交互的实例 identity 列表（留空则不限制全部放行）'),
+  city: Tsu.String().optional().describe('主人常居城市（如北京，用于私聊基础天气感知）'),
   groupActiveRate: Tsu.Number().range(0, 1).default(0.05).describe('群聊日常偶发插话/接梗的主动回复概率 (0~1)'),
   botNames: Tsu.Array(Tsu.String()).default(DEFAULT_BOT_NAMES).describe('机器人名称列表，第一个为默认名'),
   masterNick: Tsu.String().default(DEFAULT_MASTER_NICK).describe('对主人的默认基础称呼'),
@@ -111,6 +112,30 @@ export function main(ctx: Context, cfg: Config) {
     burstThreshold: cfg.burstThreshold,
     allowFriendPrivate: cfg.allowFriendPrivate
   })
+
+  let cachedWeather: { city: string; text: string; expiresAt: number } | null = null
+  const fetchWeather = async (city: string): Promise<string | null> => {
+    const now = Date.now()
+    if (cachedWeather && cachedWeather.city === city && cachedWeather.expiresAt > now) return cachedWeather.text
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 3000)
+      const res = await fetch(`http://wttr.in/${encodeURIComponent(city)}?format=%C+%t+%h&lang=zh`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'curl/7.68.0' }
+      })
+      clearTimeout(timer)
+      if (!res.ok) return cachedWeather?.city === city ? cachedWeather.text : null
+      const text = (await res.text()).trim()
+      if (!text || text.includes('Unknown') || text.includes('<html>'))
+        return cachedWeather?.city === city ? cachedWeather.text : null
+      const result = `${city} ${text}`
+      cachedWeather = { city, text: result, expiresAt: now + 3600 * 1000 }
+      return result
+    } catch {
+      return cachedWeather?.city === city ? cachedWeather.text : null
+    }
+  }
 
   const geminiClient = new GeminiClient({
     apiKey: cfg.apiKey,
@@ -426,6 +451,8 @@ export function main(ctx: Context, cfg: Config) {
         )
       }
 
+      const weather = isMaster && !groupId && cfg.city ? await fetchWeather(cfg.city) : undefined
+
       const systemPrompt = buildSystemPrompt(
         cfg,
         {
@@ -438,7 +465,8 @@ export function main(ctx: Context, cfg: Config) {
           isMaster,
           birthTime: memory.getBirthTime(),
           isTtsCoolingDown,
-          hasVoiceRequest: isVoiceRequested
+          hasVoiceRequest: isVoiceRequested,
+          weather: weather ?? undefined
         },
         extraContexts
       )

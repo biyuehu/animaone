@@ -12,6 +12,7 @@ export interface PersonaRuntimeContext {
   readonly birthTime: number
   readonly isTtsCoolingDown?: boolean
   readonly hasVoiceRequest?: boolean
+  readonly weather?: string
 }
 
 export function buildSystemPrompt(
@@ -54,6 +55,7 @@ export function buildSystemPrompt(
     [
       '【基础感知】',
       `当前时间（${ZONE}）：${now.toLocaleString(ZONE, { hour12: false, timeZone: 'Asia/Shanghai' })}`,
+      runtime.weather ? `当前天气：${runtime.weather}` : null,
       `自身诞生时间：${new Date(runtime.birthTime).toLocaleDateString(ZONE)}`,
       `诞生天数：${Math.floor((now.getTime() - runtime.birthTime) / (1000 * 60 * 60 * 24))}`,
       `平台实例名字：${runtime.identity}`,
