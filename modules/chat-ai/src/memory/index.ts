@@ -266,23 +266,46 @@ export class HierarchicalMemoryService {
       this.slidingWindow.loadInitialMessages(scopeKey, this.db.loadRecentMessages(scopeKey, this.maxTurns))
 
     const isGroup = parseScopeKey(scopeKey).type === 'group'
+    const MAX_GROUP_IDLE_GAP = 30 * 60 * 1000 // 群聊空闲跨度超过 30 分钟视为历史断层
+
     const formatTime = (ts: number) => {
       const d = new Date(ts)
       return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
     }
 
-    return this.slidingWindow.getContext(scopeKey).map((m) => {
+    const rawList = this.slidingWindow.getContext(scopeKey)
+    const result: { role: 'user' | 'model'; content: string }[] = []
+
+    for (let i = 0; i < rawList.length; i++) {
+      const m = rawList[i]
+      if (isGroup && i > 0) {
+        const prev = rawList[i - 1]
+        if (m.timestamp - prev.timestamp >= MAX_GROUP_IDLE_GAP) {
+          const diffMinutes = Math.round((m.timestamp - prev.timestamp) / 60000)
+          result.push({
+            role: 'user',
+            content: `[系统提示: 距离上文已过去 ${diffMinutes} 分钟，前文话题已自然结束，以下为全新开始的群聊内容]`
+          })
+        }
+      }
+
       const timeTag = `[${formatTime(m.timestamp)}]`
-      if (m.role === 'model') return { role: 'model', content: cleanBotSpeech(m.content) }
+      if (m.role === 'model') {
+        result.push({ role: 'model', content: cleanBotSpeech(m.content) })
+        continue
+      }
+
       const userPrefix =
         isGroup && m.userId
           ? `${masterId && String(m.userId) === String(masterId) ? `[MASTER: ${m.senderName || 'Master'}] [UID: ${m.userId}]` : `[MEMBER: ${m.senderName || 'User'}] [UID: ${m.userId}]`}`
           : ''
-      return {
+      result.push({
         role: 'user',
         content: userPrefix ? `${timeTag} ${userPrefix} ${m.content}` : `${timeTag} ${m.content}`
-      }
-    })
+      })
+    }
+
+    return result
   }
 
   public assemblePromptContext(_scopeKey: string, userId?: string, visibilityFilter?: 'public' | 'private'): string[] {

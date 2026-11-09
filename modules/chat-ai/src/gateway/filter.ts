@@ -174,10 +174,10 @@ export class MessageGateway {
 
     const lastTime = this.lastCasualSpeechTime.get(groupId) ?? this.lastCasualSpeechTime.get(scopeKey)
     if (!isCalm && lastTime && now - lastTime < this.config.followupWindow * 1000 && rawMessage.trim().length >= 2)
-      return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
+      return allowedDecision('group_followup', sanitizeCqCodes(rawMessage), false, replyId)
 
     return !isCalm && rawMessage.length >= 6 && Math.random() < this.config.groupActiveRate
-      ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage), isChatBurst, replyId)
+      ? allowedDecision('group_casual', sanitizeCqCodes(rawMessage), false, replyId)
       : rejectedDecision('rejected')
   }
 }
