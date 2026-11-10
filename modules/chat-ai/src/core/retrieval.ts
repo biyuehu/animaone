@@ -158,7 +158,8 @@ export function scoreBM25(query: string, docs: readonly RetrievalDocument[]): Ma
   const total = docs.length
   const hasMeaningfulTerm = queryTerms.some(isMeaningful)
 
-  docs.forEach((doc, index) => {
+  for (let index = 0; index < docs.length; index++) {
+    const doc = docs[index]
     const termFrequency = new Map<string, number>()
     for (const token of docTokens[index]) {
       termFrequency.set(token, (termFrequency.get(token) || 0) + 1)
@@ -176,9 +177,9 @@ export function scoreBM25(query: string, docs: readonly RetrievalDocument[]): Ma
       score += termWeight(term) * idf * ((tf * (K1 + 1)) / (tf + K1 * (1 - B + B * lengthNorm)))
     }
 
-    if (hasMeaningfulTerm && !matchedMeaningful) return
+    if (hasMeaningfulTerm && !matchedMeaningful) continue
     if (score > 0) scores.set(doc.id, score)
-  })
+  }
 
   return scores
 }
