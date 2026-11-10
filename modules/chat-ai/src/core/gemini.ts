@@ -192,13 +192,13 @@ export class GeminiClient {
 
       for (const call of functionCalls) {
         const callName = call.name ?? ''
-        const callArgsStr = call.args ? JSON.stringify(call.args) : '{}'
         const toolStartTime = Date.now()
         try {
           const toolResult = await abilityManager.executeTool(callName, call.args, abilityCtx)
           const toolDuration = Date.now() - toolStartTime
+          const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult)
           this.logger?.info(
-            `Tool <cyan>${callName}</cyan> completed in <yellow>${toolDuration}ms</yellow> (args: ${callArgsStr})`
+            `Tool <cyan>${callName}</cyan> completed in <yellow>${toolDuration}ms</yellow> -> ${resultStr}`
           )
           if (
             callName === 'choose_silence' ||
@@ -213,7 +213,7 @@ export class GeminiClient {
         } catch (err) {
           const toolDuration = Date.now() - toolStartTime
           this.logger?.error(
-            `Tool <cyan>${callName}</cyan> failed in <yellow>${toolDuration}ms</yellow> (args: ${callArgsStr}): <red>${err instanceof Error ? err.message : String(err)}</red>`
+            `Tool <cyan>${callName}</cyan> failed in <yellow>${toolDuration}ms</yellow>: <red>${err instanceof Error ? err.message : String(err)}</red>`
           )
           functionResponseParts.push({
             functionResponse: { name: callName, response: { error: err instanceof Error ? err.message : String(err) } }
