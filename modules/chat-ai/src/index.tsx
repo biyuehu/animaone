@@ -1,7 +1,7 @@
 import path from 'node:path'
 // import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
 import { type AdapterConfig, type Api, type Context, Messages, Symbols, sleep, Tsu, UserAccess } from 'kotori-bot'
-import { AbilityManager } from './ability'
+import { type AbilityContext, AbilityManager, registerKotoriCommandAbilities } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
   createDemoteUserAttitudeAbility,
@@ -184,6 +184,7 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(silenceAbility)
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
+  registerKotoriCommandAbilities(ctx, abilityManager)
 
   let isHeartbeatRunning = false
   const heartbeatTask = ctx.task({ cron: '*/3 * * * *', timeZone: 'Asia/Shanghai', start: true }, async () => {
@@ -413,7 +414,14 @@ export function main(ctx: Context, cfg: Config) {
       const scopeKey = formatScopeKey(
         groupId ? groupScope(adapter.identity, groupId) : privateScope(adapter.identity, userId)
       )
-      const abilityCtx = { userId, groupId, platform: adapter.platform, identity: adapter.identity, isMaster }
+      const abilityCtx: AbilityContext = {
+        userId,
+        groupId,
+        platform: adapter.platform,
+        identity: adapter.identity,
+        isMaster,
+        session
+      }
       const extraContexts = await abilityManager.aggregateContext(abilityCtx)
 
       if (isMaster) {

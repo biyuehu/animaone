@@ -1,4 +1,4 @@
-import type { Logger } from 'kotori-bot'
+import type { Logger, SessionMsg } from 'kotori-bot'
 
 export interface AbilityContext {
   readonly userId: string
@@ -6,6 +6,7 @@ export interface AbilityContext {
   readonly platform: string
   readonly identity: string
   readonly isMaster: boolean
+  readonly session?: SessionMsg
 }
 
 export interface AbilityToolDefinition<Args = Record<string, unknown>, Result = unknown> {
@@ -95,3 +96,5 @@ export class AbilityManager {
     return ability.toolDefinition.execute(args, ctx)
   }
 }
+
+export * from './command'
