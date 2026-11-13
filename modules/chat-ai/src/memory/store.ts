@@ -850,4 +850,9 @@ export class MemoryDatabase {
       cluesToExplore: Array.from(clues)
     }
   }
+
+  public backup(targetPath: string): void {
+    const escaped = targetPath.replace(/'/g, "''")
+    this.db.exec(`VACUUM INTO '${escaped}';`)
+  }
 }
