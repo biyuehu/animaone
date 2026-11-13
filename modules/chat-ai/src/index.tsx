@@ -1,7 +1,9 @@
+import childProcess from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 // import type { OnebotAdapter } from '@kotori-bot/kotori-plugin-adapter-onebot'
-import { type AdapterConfig, type Api, type Context, Messages, Symbols, sleep, Tsu, UserAccess } from 'kotori-bot'
-import { type AbilityContext, AbilityManager, registerKotoriCommandAbilities } from './ability'
+import { type AdapterConfig, type Api, type Context, Messages, Symbols, Tsu, UserAccess } from 'kotori-bot'
+import { AbilityManager, registerKotoriCommandAbilities } from './ability'
 import { systemStatusAbility } from './ability/system'
 import {
   createDemoteUserAttitudeAbility,
@@ -26,15 +28,9 @@ import {
   DEFAULT_MEMBER_GROUP
 } from './core/constants'
 import { GeminiClient } from './core/gemini'
-import { buildSystemPrompt } from './core/persona'
-import {
-  applyTrailingBracket,
-  calculateTypingDelay,
-  cleanBotSpeech,
-  isMeaningfulSpeech,
-  splitSentences
-} from './core/split'
-import { parseVoiceSegments, stripVoiceTags, TTSService, toVoicePayload } from './core/tts'
+import { ChatResponder } from './core/responder'
+import { TTSService, toVoicePayload } from './core/tts'
+import { ChatDispatcher } from './gateway/dispatcher'
 import { MessageGateway, sanitizeCqCodes } from './gateway/filter'
 import { formatScopeKey, groupScope, HierarchicalMemoryService, privateScope } from './memory'
 
@@ -185,6 +181,19 @@ export function main(ctx: Context, cfg: Config) {
   abilityManager.register(createKotoriMessagingAbility(ctx))
   abilityManager.register(createWebSearchOrFetchAbility(cfg.proxy))
   registerKotoriCommandAbilities(ctx, abilityManager)
+
+  const responder = new ChatResponder(ctx, cfg, tts)
+  const dispatcher = new ChatDispatcher(
+    ctx,
+    cfg,
+    memory,
+    geminiClient,
+    abilityManager,
+    tts,
+    gateway,
+    responder,
+    fetchWeather
+  )
 
   let isHeartbeatRunning = false
   const heartbeatTask = ctx.task({ cron: '*/3 * * * *', timeZone: 'Asia/Shanghai', start: true }, async () => {
@@ -344,6 +353,56 @@ export function main(ctx: Context, cfg: Config) {
       return 'TTS 合成失败，请检查外部脚本路径或查看后台日志报错。'
     })
 
+  ctx.command('freeze - 冻结导出当前灵魂状态归档文件').action((_, session) => {
+    const adapter = session.api.adapter
+    if (adapter.platform !== 'cmd') return '此指令仅限在 CMD 控制台终端执行。'
+    const masterId = String((adapter.config as AdapterConfig)?.master || '')
+    if (!masterId || String(session.userId) !== masterId) return '权限不足：仅 Master 可执行冻结指令。'
+
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const now = new Date()
+    const timeStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+    const backupDir = path.join(ctx.baseDir.data, 'backups')
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true })
+    const stageDir = path.join(backupDir, `staging-${Date.now()}`)
+    fs.mkdirSync(stageDir, { recursive: true })
+
+    try {
+      memory.getDatabase().backup(path.join(stageDir, 'mind.db'))
+      fs.writeFileSync(
+        path.join(stageDir, 'persona.json'),
+        JSON.stringify(
+          {
+            basePersona: cfg.basePersona,
+            masterPrivate: cfg.masterPrivate,
+            masterGroup: cfg.masterGroup,
+            memberGroup: cfg.memberGroup,
+            friendPrivate: cfg.friendPrivate,
+            identityAspects: cfg.identityAspects,
+            botNames: cfg.botNames,
+            masterNick: cfg.masterNick
+          },
+          null,
+          2
+        )
+      )
+      fs.writeFileSync(path.join(stageDir, 'plugin.json'), JSON.stringify(cfg, null, 2))
+
+      const targetArchive = path.join(backupDir, `soul-${timeStamp}.anima`)
+      const proc = childProcess.spawnSync(
+        'tar',
+        ['--format=zip', '-cf', targetArchive, '-C', stageDir, 'mind.db', 'persona.json', 'plugin.json'],
+        { windowsHide: true }
+      )
+      if (proc.status !== 0) throw new Error(proc.stderr?.toString() || 'Tar archive packaging failed')
+
+      ctx.logger.info(`[Soul Freeze] Archive created: ${targetArchive}`)
+      return `灵魂状态已成功冻结归档：${targetArchive}`
+    } finally {
+      fs.rmSync(stageDir, { recursive: true, force: true })
+    }
+  })
+
   ctx.midware(async (next, session) => {
     if (session.channelId || session.guildId) return next()
 
@@ -414,337 +473,22 @@ export function main(ctx: Context, cfg: Config) {
       const scopeKey = formatScopeKey(
         groupId ? groupScope(adapter.identity, groupId) : privateScope(adapter.identity, userId)
       )
-      const abilityCtx: AbilityContext = {
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
+
+      await dispatcher.dispatch({
+        session,
+        scopeKey,
         userId,
         groupId,
-        platform: adapter.platform,
-        identity: adapter.identity,
         isMaster,
-        session
-      }
-      const extraContexts = await abilityManager.aggregateContext(abilityCtx)
-
-      if (isMaster) {
-        extraContexts.push(`【关于主人的画像】`, ...memory.assemblePromptContext(scopeKey, '__master__'))
-        const dream = memory.consumePendingDream()
-        if (dream) {
-          ctx.logger.info(`Consumed pending dream reflection for master: "${dream}"`)
-          extraContexts.push(`【夜间梦境灵感】昨夜产生了以下顿悟或梦境灵感：“${dream}”。契合时可向主人分享。`)
-        }
-      } else {
-        const attitude = memory.getUserAttitude(`${adapter.identity}:${userId}`)
-        if (attitude.level > 0) {
-          extraContexts.push(
-            `【对当前对话者的态度】为${attitude.statusText}(警惕度: ${attitude.level}/4)${attitude.reason ? `，降级原因：“${attitude.reason}”` : ''}。态度会决定你的回复言语乃至沉默忽视情况`
-          )
-        }
-        extraContexts.push(
-          '【关于当前对话者的画像】',
-          ...memory.assemblePromptContext(scopeKey, `${adapter.identity}:${userId}`)
-        )
-        extraContexts.push('【关于主人的公开画像】', ...memory.assemblePromptContext(scopeKey, '__master__', 'public'))
-      }
-
-      if (decision.reason === 'group_casual' || decision.reason === 'group_followup')
-        extraContexts.push(
-          '【群聊日常旁观提醒】你当前是在群内参与聊天或路过旁观。如果你觉得不需要回复、不想搭理对方或没必要插嘴，请调用 choose_silence 工具保持静默。'
-        )
-
-      const isVoiceRequested = /(发|说|用|来)(个|条|句|段)?语音|想听你(的声音|说)/i.test(targetMessage)
-      const isTtsCoolingDown = !isMaster && tts.isCoolingDown(scopeKey, isMaster)
-
-      if (tts.isEnabled() && !isTtsCoolingDown && isVoiceRequested) {
-        extraContexts.push(
-          `【对话者语音请求】对方表达了希望听到你语音回复的意向。如果你愿意，请挑选一句最合适的核心短句包裹在 [voice: 内容] 中发语音（请严格遵守单句 ${cfg.ttsMaxChars} 字以内的限制，简短精炼）。`
-        )
-      }
-
-      const weather = isMaster && !groupId && cfg.city ? await fetchWeather(cfg.city) : undefined
-
-      const systemPrompt = buildSystemPrompt(
-        cfg,
-        {
-          platform: adapter.platform,
-          identity: adapter.identity,
-          masterId,
-          senderName: session.sender.nickname,
-          userId,
-          groupId,
-          isMaster,
-          birthTime: memory.getBirthTime(),
-          isTtsCoolingDown,
-          hasVoiceRequest: isVoiceRequested,
-          weather: weather ?? undefined
-        },
-        extraContexts
-      )
-
-      const startTime = Date.now()
-      const userRole = isMaster ? 'MASTER' : groupId ? 'MEMBER' : 'FRIEND'
-      ctx.logger.info(
-        `Received message [type: <magenta>${decision.reason}</magenta>] from <cyan>${userRole}</cyan>(<yellow>${userId}</yellow>) in <blue>${scopeKey}</blue> (${targetMessage.length} chars): ${targetMessage}`
-      )
-
-      const now = new Date()
-      const timeTag = `[${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}]`
-      const quotedMsg = decision.replyId ? memory.findQuotedMessage(scopeKey, decision.replyId) : null
-      const replyHint = quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
-
-      const sendBotSpeech = async (rawText: string, isFirstOutput: boolean): Promise<boolean> => {
-        const text = cleanBotSpeech(rawText)
-        if (!text || !isMeaningfulSpeech(text)) return false
-
-        const voiceParts = parseVoiceSegments(text)
-
-        interface OutputItem {
-          isVoice: boolean
-          content: string
-          lang?: string
-        }
-        const items: OutputItem[] = []
-
-        for (const part of voiceParts) {
-          if (part.isVoice) {
-            const cleanVoiceText = cleanBotSpeech(part.content.replace(/\r?\n+/g, '，')).trim()
-            if (cleanVoiceText && isMeaningfulSpeech(cleanVoiceText)) {
-              if (tts.canSynthesize(scopeKey, cleanVoiceText, isMaster)) {
-                // 立即抢占锁定冷却！一旦决定发送语音，在进入合成前即刻锁定时间戳，彻底杜绝异步合成期间的冷却盲区
-                tts.recordSent(scopeKey)
-                items.push({
-                  isVoice: true,
-                  content: cleanVoiceText,
-                  lang: part.lang
-                })
-              } else {
-                // 无法合成语音（超长、未开启或冷却中），安全降级为普通文字段
-                const subSentences = cfg.enableHumanDelay
-                  ? splitSentences(cleanVoiceText, cfg.splitThreshold)
-                  : [cleanVoiceText]
-                for (const s of subSentences) {
-                  const cleanedSub = cleanBotSpeech(s).trim()
-                  if (cleanedSub && isMeaningfulSpeech(cleanedSub)) {
-                    items.push({ isVoice: false, content: cleanedSub })
-                  }
-                }
-              }
-            }
-          } else {
-            const cleanText = cleanBotSpeech(part.content).trim()
-            if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
-            const subSentences = cfg.enableHumanDelay ? splitSentences(cleanText, cfg.splitThreshold) : [cleanText]
-            for (const s of subSentences) {
-              const cleanedSub = cleanBotSpeech(s).trim()
-              if (cleanedSub && isMeaningfulSpeech(cleanedSub)) {
-                items.push({ isVoice: false, content: cleanedSub })
-              }
-            }
-          }
-        }
-
-        if (items.length === 0) return false
-
-        // 针对待发送文本：若单段长度小于 50 且末尾为句号，自动去掉末尾句号
-        for (const item of items) {
-          if (!item.isVoice) {
-            let c = cleanBotSpeech(item.content).trim()
-            if (c.length < 50 && (c.endsWith('。') || (c.endsWith('.') && !c.endsWith('..')))) {
-              c = c
-                .replace(/[。]+$/, '')
-                .replace(/(?<!\.)\.$/, '')
-                .trimEnd()
-            }
-            item.content = c
-          }
-        }
-
-        // 仅在最后一项为纯文字时附带半括号拟人尾缀
-        const lastIdx = items.length - 1
-        if (lastIdx >= 0 && !items[lastIdx].isVoice) {
-          items[lastIdx] = {
-            isVoice: false,
-            content: applyTrailingBracket(items[lastIdx].content, cfg.trailingBracketRate, cfg.trailingBracketVariants)
-          }
-        }
-
-        let firstTextSent = false
-        let sentAny = false
-
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i]
-
-          if (item.isVoice) {
-            if (cfg.ttsSequential) {
-              // 连续阻塞模式：等待 TTS 脚本生成完毕后发送语音条，随后再继续后续文字
-              const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
-              if (wavPath) {
-                tts.recordSent(scopeKey)
-                const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
-                if (voiceDelay > 0) await sleep(voiceDelay)
-                await session.quick(Messages.voice(toVoicePayload(wavPath, adapter.platform)))
-                sentAny = true
-                continue
-              }
-            } else {
-              // 独立非阻塞模式（默认）：语音后台异步合成并发送，不阻塞文字消息的打字机流
-              void (async () => {
-                try {
-                  const wavPath = await tts.synthesize(item.content, adapter.identity, item.lang)
-                  if (wavPath) {
-                    tts.recordSent(scopeKey)
-                    const voiceDelay = cfg.enableHumanDelay ? Math.floor(400 + Math.random() * 400) : 0
-                    if (voiceDelay > 0) await sleep(voiceDelay)
-                    await session.quick(Messages.voice(toVoicePayload(wavPath, adapter.platform)))
-                  } else {
-                    let fallbackText = cleanBotSpeech(item.content).trim()
-                    if (fallbackText && isMeaningfulSpeech(fallbackText)) {
-                      if (
-                        fallbackText.length < 50 &&
-                        (fallbackText.endsWith('。') || (fallbackText.endsWith('.') && !fallbackText.endsWith('..')))
-                      ) {
-                        fallbackText = fallbackText
-                          .replace(/[。]+$/, '')
-                          .replace(/(?<!\.)\.$/, '')
-                          .trimEnd()
-                      }
-                      await session.quick(fallbackText)
-                    }
-                  }
-                } catch (err) {
-                  ctx.logger.error(`Async voice synthesis failed: ${err instanceof Error ? err.message : String(err)}`)
-                }
-              })()
-              sentAny = true
-              continue
-            }
-          }
-
-          let cleanText = cleanBotSpeech(item.content).trim()
-          if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
-
-          if (
-            cleanText.length < 50 &&
-            (cleanText.endsWith('。') || (cleanText.endsWith('.') && !cleanText.endsWith('..')))
-          ) {
-            cleanText = cleanText
-              .replace(/[。]+$/, '')
-              .replace(/(?<!\.)\.$/, '')
-              .trimEnd()
-          }
-          if (!cleanText || !isMeaningfulSpeech(cleanText)) continue
-
-          const isFirstText = isFirstOutput && !firstTextSent
-          firstTextSent = true
-
-          const delayTime = cfg.enableHumanDelay ? Math.max(0, calculateTypingDelay(cleanText, isFirstText)) : 0
-          if (delayTime > 0) {
-            ctx.logger.debug(`Typing delay: ${delayTime}ms for segment ${i + 1}/${items.length}`)
-            await sleep(delayTime)
-          }
-          await session.quick(
-            isFirstText && groupId && decision.needTargetUser
-              ? Math.random() > 0.5
-                ? Messages(Messages.mention(session.userId), ' ', cleanText)
-                : Messages(Messages.reply(session.messageId), cleanText)
-              : cleanText
-          )
-          sentAny = true
-        }
-
-        return sentAny
-      }
-
-      let hasSentImmediate = false
-      const allEmittedTexts: string[] = []
-
-      let reply: string
-      try {
-        reply = await geminiClient.chat(
-          systemPrompt,
-          memory.getShortTerm(scopeKey, masterId),
-          groupId
-            ? `${timeTag} [${isMaster ? 'MASTER' : 'MEMBER'}: ${session.sender.nickname}] [UID: ${userId}] ${replyHint}${targetMessage}`
-            : `${timeTag} ${targetMessage}`,
-          abilityManager,
-          abilityCtx,
-          cfg.maxToolLoops,
-          async (earlyText) => {
-            const cleaned = cleanBotSpeech(earlyText)
-            if (!isMeaningfulSpeech(cleaned, true)) {
-              ctx.logger.debug(`Suppressed meaningless early text before tools: ${earlyText}`)
-              return
-            }
-            const sent = await sendBotSpeech(earlyText, true)
-            if (sent) {
-              hasSentImmediate = true
-              allEmittedTexts.push(earlyText)
-            }
-          }
-        )
-      } catch (chatErr) {
-        if (chatErr instanceof Error && chatErr.message === 'PROHIBITED_CONTENT') {
-          ctx.logger.warn(
-            `<red>[Circuit Breaker]</red> PROHIBITED_CONTENT detected for scope <blue>${scopeKey}</blue>. Purging suspicious last inbound message and retrying...`
-          )
-          // 熔断自愈：从短期滑窗和数据库中剔除最近可疑入站消息
-          memory.purgeSuspiciousUserMessage(scopeKey)
-
-          // 降级重试：以安全无害的占位降级提问重试，引导模型平稳过渡而不致会话死锁瘫痪
-          const sanitizedPrompt =
-            '刚才的消息因包含潜在违规词或敏感信息被系统阻断。请简短友善地回应提示“此内容暂无法回应，请换个话题吧”，不要复述违规内容。'
-          reply = await geminiClient.chat(
-            systemPrompt,
-            memory.getShortTerm(scopeKey, masterId),
-            `${timeTag} ${sanitizedPrompt}`,
-            abilityManager,
-            abilityCtx,
-            1,
-            async (earlyText) => {
-              const cleaned = cleanBotSpeech(earlyText)
-              if (!isMeaningfulSpeech(cleaned, true)) {
-                ctx.logger.debug(`Suppressed meaningless early text before tools: ${earlyText}`)
-                return
-              }
-              const sent = await sendBotSpeech(earlyText, true)
-              if (sent) {
-                hasSentImmediate = true
-                allEmittedTexts.push(earlyText)
-              }
-            }
-          )
-        } else {
-          throw chatErr
-        }
-      }
-
-      ctx.logger.info(
-        `Session round finished in <yellow>${Date.now() - startTime}ms</yellow>${reply ? ` (reply: <green>${reply.length}</green> chars)` : ''}`
-      )
-
-      if (reply && reply !== '__NO_REPLY__') {
-        const cleaned = cleanBotSpeech(reply)
-        if (isMeaningfulSpeech(cleaned)) {
-          allEmittedTexts.push(reply)
-          await sendBotSpeech(reply, !hasSentImmediate)
-        }
-      }
-
-      const fullCombinedReply = cleanBotSpeech(stripVoiceTags(allEmittedTexts.join('\n'))).trim()
-      if (!fullCombinedReply || !isMeaningfulSpeech(fullCombinedReply)) return
-
-      if (groupId && (decision.reason === 'group_casual' || decision.reason === 'group_followup'))
-        gateway.recordCasualSpeech(groupId)
-
-      queueMicrotask(() =>
-        memory.recordTurn(
-          scopeKey,
-          userId,
-          targetMessage,
-          fullCombinedReply,
-          session.sender.nickname,
-          isMaster,
-          session.messageId
-        )
-      )
+        masterId,
+        decision,
+        targetMessage,
+        timeTag: `[${pad(now.getMonth() + 1)}/${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}]`,
+        replyHint: quotedMsg ? `【引用了 [${quotedMsg.senderName}]: ${quotedMsg.content}】` : ''
+      })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       ctx.logger.error(`Failed to handle message: ${errorMsg}`)
